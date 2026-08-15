@@ -1,0 +1,59 @@
+{{define "content"}}
+{{$st := .Data.Stats}}
+{{$orders := .Data.Orders}}
+
+<div class="grid gap-4 sm:grid-cols-2">
+  <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+    <div class="text-sm text-muted-foreground">Pesanan Hari Ini</div>
+    <div class="mt-1 text-2xl font-semibold tracking-tight">{{$st.OrdersToday}}</div>
+  </div>
+  <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+    <div class="text-sm text-muted-foreground">Pendapatan Hari Ini</div>
+    <div class="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{{price $st.RevenueToday}}</div>
+  </div>
+  <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+    <div class="text-sm text-muted-foreground">Total Pelanggan</div>
+    <div class="mt-1 text-2xl font-semibold tracking-tight">{{$st.TotalCustomers}}</div>
+  </div>
+  <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+    <div class="text-sm text-muted-foreground">Menunggu Proses</div>
+    <div class="mt-1 text-2xl font-semibold tracking-tight">{{$st.PendingOrders}}</div>
+  </div>
+</div>
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="font-heading text-sm font-semibold tracking-tight">Pesanan Terbaru</h2>
+    <a href="/admin/orders" class="text-xs text-muted-foreground hover:text-foreground hover:underline">Lihat semua</a>
+  </div>
+  {{if $orders}}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b">
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">No. Order</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Pelanggan</th>
+          <th class="px-2 py-2 text-right text-xs font-medium text-muted-foreground">Total</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Status</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Waktu</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $orders}}
+        <tr class="border-b last:border-0 hover-row">
+          <td class="px-2 py-2">{{.OrderNumber}}</td>
+          <td class="px-2 py-2">{{if .Customer}}{{.Customer.Name}}{{else}}-{{end}}</td>
+          <td class="px-2 py-2 text-right tabular-nums">{{price .Total}}</td>
+          <td class="px-2 py-2"><span class="badge {{badge .Status}}">{{statusLabel .Status}}</span></td>
+          <td class="px-2 py-2 text-muted-foreground">{{ftime .CreatedAt}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="py-8 text-center text-sm text-muted-foreground">Belum ada pesanan.</div>
+  {{end}}
+</div>
+{{end}}
+{{template "base" .}}

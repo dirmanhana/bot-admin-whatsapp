@@ -1,0 +1,33 @@
+{{define "content"}}
+{{$cust := .Data.Customer}}
+{{$msgs := .Data.Messages}}
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <div class="mb-3 flex items-center justify-between">
+    <div>
+      <h2 class="font-heading text-sm font-semibold tracking-tight">
+        {{if $cust.Name}}{{$cust.Name}}{{else}}<span class="text-muted-foreground">(tanpa nama)</span>{{end}}
+        <span class="font-normal text-muted-foreground">· {{$cust.Phone}}</span>
+      </h2>
+      {{if eq $cust.Status "blocked"}}<span class="badge badge-red mt-1">Diblokir</span>{{end}}
+    </div>
+    <a href="/admin/customers"
+      class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-7 gap-1 px-2">
+      {{icon "arrow-left"}}Kembali
+    </a>
+  </div>
+
+  {{if $msgs}}
+  <div class="chat">
+    {{range $msgs}}
+    <div class="bubble {{if eq .Direction "out"}}bubble-out{{else}}bubble-in{{end}}">
+      {{.Body}}<span class="meta">{{ftime .CreatedAt}}{{if .MessageType}} · {{.MessageType}}{{end}}</span>
+    </div>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="py-8 text-center text-sm text-muted-foreground">Belum ada percakapan.</div>
+  {{end}}
+</div>
+{{end}}
+{{template "base" .}}

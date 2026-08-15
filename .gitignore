@@ -1,0 +1,8 @@
+# binary
+/bot-admin-whatsapp
+
+# env & secrets
+.env
+
+# logs
+*.log

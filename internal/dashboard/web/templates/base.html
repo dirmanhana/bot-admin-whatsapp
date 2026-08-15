@@ -1,0 +1,58 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="id" class="min-h-svh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · {{.Store}}</title>
+  <link rel="stylesheet" href="/admin/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='oklch(55% .09 225)'/><text x='16' y='22' font-size='16' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>B</text></svg>">
+</head>
+<body class="min-h-svh bg-background font-sans antialiased">
+  <div class="flex min-h-svh">
+    <aside class="bg-sidebar text-sidebar-foreground hidden w-60 shrink-0 flex-col border-r md:flex">
+      <div class="flex h-14 items-center gap-2 border-b px-4">
+        <div class="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">{{icon "dashboard"}}</div>
+        <span class="text-sm font-medium">{{.Store}}</span>
+      </div>
+      <nav class="flex flex-col gap-1 p-3">
+        {{$active := .Active}}
+        {{$nav := .Nav}}
+        {{range $nav}}
+        <a href="{{.Href}}" class="flex items-center gap-2.5 rounded-full px-3 py-2 text-left text-sm font-medium transition-colors {{if eq $active .Key}}bg-sidebar-accent text-sidebar-accent-foreground{{else}}text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground{{end}}">
+          {{icon .Ico}}{{.Label}}
+        </a>
+        {{end}}
+      </nav>
+      <div class="mt-auto border-t p-3">
+        <div class="flex items-center gap-2 px-1 py-1 text-xs text-muted-foreground">
+          <span class="flex size-6 items-center justify-center rounded-full bg-secondary">{{icon "users"}}</span>
+          <span class="truncate">{{.User}}</span>
+          <form method="post" action="/admin/logout" class="ml-auto">
+            <button class="inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted hover:text-foreground" type="submit">
+              {{icon "logout"}}<span>Keluar</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex min-w-0 flex-1 flex-col">
+      <header class="flex h-14 shrink-0 items-center justify-between border-b bg-card px-4 md:px-6">
+        <h1 class="font-heading text-base font-semibold tracking-tight">{{.Title}}</h1>
+        <div class="flex items-center gap-2 text-sm text-muted-foreground">
+          <span class="flex size-6 items-center justify-center rounded-full bg-secondary">{{icon "users"}}</span>
+          <span class="hidden sm:inline">{{.User}}</span>
+        </div>
+      </header>
+
+      <div class="flex flex-col gap-4 p-4 md:p-6">
+        {{if .Msg}}<div class="flash flash-ok">{{.Msg}}</div>{{end}}
+        {{if .Err}}<div class="flash flash-err">{{.Err}}</div>{{end}}
+        {{template "content" .}}
+      </div>
+    </main>
+  </div>
+</body>
+</html>
+{{end}}

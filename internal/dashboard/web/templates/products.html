@@ -1,0 +1,124 @@
+{{define "content"}}
+{{$products := .Data.Products}}
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <h2 class="mb-3 font-heading text-sm font-semibold tracking-tight">Tambah Produk</h2>
+  <form method="post" action="/admin/products" class="flex flex-col gap-1">
+    <div class="grid gap-3 grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Nama</label>
+        <input name="name" required
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Harga (Rp)</label>
+        <input name="price" inputmode="numeric" placeholder="15000" required
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="mt-2 text-sm text-muted-foreground">Deskripsi</label>
+      <textarea name="description" rows="2"
+        class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm"></textarea>
+    </div>
+    <div class="grid gap-3 grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="mt-2 text-sm text-muted-foreground">Stok (kosong = ∞)</label>
+        <input name="stock" inputmode="numeric" placeholder="-1"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="mt-2 text-sm text-muted-foreground">Path Gambar (opsional)</label>
+        <input name="image_path" placeholder="/data/products/1.png"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+    </div>
+    <div class="mt-3">
+      <button type="submit"
+        class="inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">
+        Simpan Produk
+      </button>
+    </div>
+  </form>
+</div>
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b">
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Nama</th>
+          <th class="px-2 py-2 text-right text-xs font-medium text-muted-foreground">Harga</th>
+          <th class="px-2 py-2 text-right text-xs font-medium text-muted-foreground">Stok</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Status</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $products}}
+        <tr class="border-b last:border-0 hover-row">
+          <td class="px-2 py-2">
+            <div class="font-medium">{{.Name}}</div>
+            {{if .Description}}<div class="text-xs text-muted-foreground">{{.Description}}</div>{{end}}
+          </td>
+          <td class="px-2 py-2 text-right tabular-nums">{{price .Price}}</td>
+          <td class="px-2 py-2 text-right tabular-nums">{{if lt .Stock 0}}∞{{else}}{{.Stock}}{{end}}</td>
+          <td class="px-2 py-2">
+            {{if .IsActive}}<span class="badge badge-green">Aktif</span>{{else}}<span class="badge badge-gray">Nonaktif</span>{{end}}
+          </td>
+          <td class="px-2 py-2">
+            <details class="group">
+              <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground list-none">Ubah</summary>
+              <form method="post" action="/admin/products/{{.ID}}" class="mt-2 flex flex-col gap-1 rounded-lg border bg-muted/40 p-3">
+                <div class="grid gap-3 grid-cols-2">
+                  <div class="flex flex-col gap-1">
+                    <label class="text-sm text-muted-foreground">Nama</label>
+                    <input name="name" value="{{.Name}}" required
+                      class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+                  </div>
+                  <div class="flex flex-col gap-1">
+                    <label class="text-sm text-muted-foreground">Harga</label>
+                    <input name="price" value="{{.Price}}"
+                      class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+                  </div>
+                </div>
+                <div class="grid gap-3 grid-cols-2">
+                  <div class="flex flex-col gap-1">
+                    <label class="mt-2 text-sm text-muted-foreground">Stok</label>
+                    <input name="stock" value="{{.Stock}}"
+                      class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+                  </div>
+                  <div class="flex flex-col gap-1">
+                    <label class="mt-2 text-sm text-muted-foreground">Path Gambar</label>
+                    <input name="image_path" value="{{.ImagePath}}"
+                      class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+                  </div>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label class="mt-2 text-sm text-muted-foreground">Deskripsi</label>
+                  <textarea name="description" rows="2"
+                    class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">{{.Description}}</textarea>
+                </div>
+                <label class="mt-2 flex items-center gap-2 text-sm">
+                  <input type="checkbox" name="is_active" {{if .IsActive}}checked{{end}} class="size-4">
+                  Aktif (tampil di katalog)
+                </label>
+                <div class="mt-1 flex gap-2">
+                  <button type="submit"
+                    class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-7 gap-1 px-2">
+                    Simpan
+                  </button>
+                </div>
+              </form>
+            </details>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5"><div class="py-8 text-center text-sm text-muted-foreground">Belum ada produk.</div></td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+{{template "base" .}}

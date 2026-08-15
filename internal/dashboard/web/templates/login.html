@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="id" class="min-h-svh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Masuk · {{.Store}}</title>
+  <link rel="stylesheet" href="/admin/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='oklch(55% .09 225)'/><text x='16' y='22' font-size='16' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>B</text></svg>">
+</head>
+<body class="min-h-svh bg-background font-sans antialiased">
+  <div class="flex min-h-svh items-center justify-center p-4">
+    <div class="w-full max-w-md rounded-xl bg-card p-6 shadow-xs ring-1 ring-foreground/10">
+      <div class="flex items-center gap-2">
+        <div class="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">{{icon "dashboard"}}</div>
+        <div>
+          <div class="font-heading text-base font-semibold tracking-tight">{{.Store}}</div>
+          <div class="text-sm text-muted-foreground">Dashboard Admin</div>
+        </div>
+      </div>
+
+      {{if .Err}}<div class="flash flash-err mt-4">{{.Err}}</div>{{end}}
+
+      <form method="post" action="/admin/login" class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground" for="user">Username</label>
+        <input id="user" name="username" autocomplete="username" required autofocus
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        <label class="mt-2 text-sm text-muted-foreground" for="pass">Password</label>
+        <input id="pass" name="password" type="password" autocomplete="current-password" required
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        <button type="submit"
+          class="mt-3 inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">
+          Masuk
+        </button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

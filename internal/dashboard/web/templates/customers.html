@@ -1,0 +1,68 @@
+{{define "content"}}
+{{$customers := .Data.Customers}}
+{{$q := .Data.Q}}
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <form method="get" action="/admin/customers" class="flex items-center gap-2">
+    <input name="q" value="{{$q}}" placeholder="Cari nama / nomor / catatan..."
+      class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+    <button type="submit"
+      class="inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-8 gap-1.5 px-2.5">
+      {{icon "search"}}Cari
+    </button>
+  </form>
+</div>
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b">
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Nama</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Nomor</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Catatan</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Status</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Chat</th>
+          <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $customers}}
+        <tr class="border-b last:border-0 hover-row">
+          <td class="px-2 py-2 font-medium">{{if .Name}}{{.Name}}{{else}}<span class="text-muted-foreground">(tanpa nama)</span>{{end}}</td>
+          <td class="px-2 py-2 tabular-nums">{{.Phone}}</td>
+          <td class="px-2 py-2 max-w-52 text-xs text-muted-foreground break-words">{{.Notes}}</td>
+          <td class="px-2 py-2">
+            {{if eq .Status "blocked"}}<span class="badge badge-red">Diblokir</span>{{else}}<span class="badge badge-green">Aktif</span>{{end}}
+          </td>
+          <td class="px-2 py-2">
+            <a href="/admin/customers/{{.ID}}/chat"
+              class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-7 gap-1 px-2">
+              Lihat
+            </a>
+          </td>
+          <td class="px-2 py-2">
+            <form method="post" action="/admin/customers/{{.ID}}/status">
+              {{if eq .Status "blocked"}}
+              <button name="status" value="active" type="submit"
+                class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-7 gap-1 px-2">
+                Buka
+              </button>
+              {{else}}
+              <button name="status" value="blocked" type="submit" onclick="return confirm('Blokir pelanggan ini?')"
+                class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-destructive text-primary-foreground hover:bg-destructive/90 h-7 gap-1 px-2">
+                Blokir
+              </button>
+              {{end}}
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6"><div class="py-8 text-center text-sm text-muted-foreground">Tidak ada pelanggan.</div></td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+{{template "base" .}}
