@@ -34,17 +34,21 @@ func main() {
 	defer cancel()
 
 	// --- Database ---
-	pool, err := store.Connect(ctx, cfg.DatabaseURL)
+	dsn := cfg.DatabaseURL
+	if cfg.DBDriver == "sqlite" {
+		dsn = cfg.SQLitePath
+	}
+	db, err := store.Open(ctx, cfg.DBDriver, dsn)
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
-	defer pool.Close()
+	defer db.Close()
 
-	if err := store.Migrate(ctx, pool); err != nil {
+	st := store.New(db, cfg.DBDriver)
+	if err := st.Migrate(ctx); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
 
-	st := store.New(pool)
 	gowa := gowaclient.New(cfg.GowaBaseURL, st)
 	aiSvc := ai.New(st, cfg)
 	rtr := router.New(st, gowa, cfg, aiSvc)

@@ -1,8 +1,15 @@
 # binary
 /bot-admin-whatsapp
+/bot-admin-whatsapp.exe
+*.exe
 
 # env & secrets
 .env
 
 # logs
 *.log
+
+# sqlite
+*.db
+*.db-shm
+*.db-wal

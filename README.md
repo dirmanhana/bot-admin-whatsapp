@@ -93,6 +93,8 @@ Bot layanan pelanggan + dashboard admin untuk toko/UMKM berbasis **WhatsApp**. M
 
 ## Instalasi & Menjalankan
 
+### Mode Postgres (default)
+
 ```bash
 # 1. Clone & masuk
 git clone <repo-url> && cd bot-admin-whatsapp
@@ -111,8 +113,26 @@ go build -o bot-admin-whatsapp .
 go run .
 ```
 
+### Mode SQLite (tanpa server, cocok untuk Windows .exe)
+
+```bash
+# Konfigurasi: ubah DB_DRIVER=sqlite (file DB otomatis dibuat, migrasi otomatis)
+DB_DRIVER=sqlite SQLITE_PATH=bot_admin_whatsapp.db ./bot-admin-whatsapp
+```
+
+Database tersimpan sebagai satu file lokal (`SQLITE_PATH`), tidak perlu instal Postgres. `go run .` tetap jalan untuk development.
+
+### Build Windows .exe
+
+```bash
+# Di mesin mana pun (Linux/macOS/Windows) dengan Go terpasang:
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o bot-admin-whatsapp.exe .
+```
+
+Hasilnya satu file `bot-admin-whatsapp.exe` (murni Go, tanpa CGO). Tinggal buat `.env` di sebelahnya dengan `DB_DRIVER=sqlite`, lalu jalankan — semua (server, dashboard, webhook, SQLite) berjalan dalam satu proses.
+
 Saat pertama start:
-- Migrasi SQL dijalankan otomatis (`internal/store/migrations/*.sql`)
+- Migrasi SQL dijalankan otomatis (`internal/store/migrations/postgres/*.sql` atau `internal/store/migrations/sqlite/*.sql` sesuai dialect)
 - Server mendengar di `:8080`
 - Dashboard di `http://localhost:8080/admin`
 - Webhook gowa di `POST http://localhost:8080/webhook/gowa`
@@ -128,10 +148,12 @@ Lihat [.env.example](.env.example) untuk template lengkap.
 | Variabel | Default | Keterangan |
 |---|---|---|
 | `PORT` | `8080` | Port server HTTP |
-| `DATABASE_URL` | `postgres://dirman@127.0.0.1:5433/...` | DSN Postgres |
+| `DB_DRIVER` | `postgres` | `postgres` (butuh server) atau `sqlite` (file lokal, tanpa server — untuk Windows .exe) |
+| `DATABASE_URL` | `postgres://dirman@127.0.0.1:5433/...` | DSN Postgres (dipakai saat `DB_DRIVER=postgres`) |
+| `SQLITE_PATH` | `bot_admin_whatsapp.db` | Path file DB SQLite (dipakai saat `DB_DRIVER=sqlite`) |
 | `GOWA_BASE_URL` | `http://127.0.0.1:3000` | URL API gowa |
 | `GOWA_WEBHOOK_URL` | `http://127.0.0.1:8080/webhook/gowa` | URL yang didaftarkan ke gowa |
-| `GOWA_WEBHOOK_SECRET` | `secret` | Secret header `X-Webhook-Secret` |
+| `GOWA_WEBHOOK_SECRET` | `secret` | Secret HMAC webhook (`X-Hub-Signature-256`) — harus sama dengan secret webhook device di gowa |
 | `ADMIN_PHONE` | `628123456789` | Nomor admin (format internasional tanpa `+`) |
 | `DASHBOARD_USER` | `admin` | Login dashboard |
 | `DASHBOARD_PASSWORD` | `admin123` | **Ganti!** |
@@ -313,7 +335,7 @@ Semua di bawah `/admin` — lihat [docs/api.md](docs/api.md) untuk detail lengka
 
 | Gejala | Solusi |
 |---|---|
-| `connect postgres` gagal | Pastikan Postgres jalan & `DATABASE_URL` benar |
+| `connect postgres` gagal | Pastikan Postgres jalan & `DATABASE_URL` benar (atau ganti `DB_DRIVER=sqlite`) |
 | Belum ada akun gowa aktif | Dashboard → Akun WA → tambah akun → aktifkan |
 | QR tidak muncul | Akun aktif & device dibuat; muat ulang halaman |
 | Pesan pelanggan tidak masuk | Cek **Set Webhook** pada akun aktif; pastikan gowa login |
