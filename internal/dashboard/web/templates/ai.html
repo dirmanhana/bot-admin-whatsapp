@@ -1,0 +1,127 @@
+{{define "content"}}
+{{$st := .Data.Settings}}
+{{$docs := .Data.Docs}}
+
+<div class="grid gap-4">
+  <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+    <div class="mb-3 flex items-center gap-2">
+      {{icon "sparkles"}}<h2 class="font-heading text-sm font-semibold tracking-tight">Konfigurasi AI</h2>
+    </div>
+    <p class="mb-3 text-sm text-muted-foreground">Sambungkan API LLM — NVIDIA NIM, DeepSeek, Groq, atau Gemini. Bot akan menjawab pertanyaan pelanggan menggunakan data yang Anda unggah di bawah.</p>
+    <form method="post" action="/admin/ai" class="flex flex-col gap-1">
+      <div class="grid gap-3 grid-cols-2">
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-foreground">Penyedia</label>
+          <select name="provider" id="provider" onchange="applyPreset(this)"
+            class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+            <option value="">— pilih penyedia —</option>
+            {{range .Data.Providers}}
+            <option value="{{.Key}}" data-url="{{.BaseURL}}" data-model="{{.Model}}" {{if eq $st.Provider .Key}}selected{{end}}>{{.Label}}</option>
+            {{end}}
+          </select>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-foreground">API Key</label>
+          <input name="api_key" value="{{$st.APIKey}}" type="password" autocomplete="off" placeholder="sk-..."
+            class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        </div>
+      </div>
+      <div class="grid gap-3 grid-cols-2">
+        <div class="flex flex-col gap-1">
+          <label class="mt-2 text-sm text-muted-foreground">Base URL</label>
+          <input name="base_url" id="base_url" value="{{$st.BaseURL}}" placeholder="https://api.deepseek.com/v1"
+            class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="mt-2 text-sm text-muted-foreground">Model</label>
+          <input name="model" id="model" value="{{$st.Model}}" placeholder="deepseek-chat"
+            class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        </div>
+      </div>
+      <label class="mt-2 flex items-center gap-2 text-sm">
+        <input type="checkbox" name="enabled" value="1" {{if $st.Enabled}}checked{{end}} class="size-4">
+        Aktifkan jawaban AI untuk pelanggan
+      </label>
+      <div class="mt-3 flex gap-2">
+        <button type="submit"
+          class="inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">
+          {{icon "save"}}Simpan
+        </button>
+        <button type="submit" formaction="/admin/ai/test" formmethod="post"
+          class="inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-8 gap-1.5 px-2.5">
+          {{icon "test"}}Uji Koneksi
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+    <div class="mb-3 flex items-center gap-2">
+      {{icon "database"}}<h2 class="font-heading text-sm font-semibold tracking-tight">Pangkalan Data (Knowledge Base)</h2>
+    </div>
+    <p class="mb-3 text-sm text-muted-foreground">Unggah <strong>PDF, CSV, XLSX, atau TXT</strong> berisi katalog, keterangan produk, harga, dll. Bot akan menjawab pertanyaan pelanggan berdasarkan data ini.</p>
+    <form method="post" action="/admin/ai/knowledge" enctype="multipart/form-data" class="flex items-end gap-2">
+      <div class="flex min-w-0 flex-1 flex-col gap-1">
+        <label class="text-sm text-muted-foreground">File katalog (pdf / csv / xlsx / txt)</label>
+        <input type="file" name="file" accept=".pdf,.csv,.xlsx,.txt,.md" required
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium md:text-sm">
+      </div>
+      <button type="submit"
+        class="inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">
+        {{icon "upload"}}Unggah
+      </button>
+    </form>
+
+    <div class="mt-4">
+      {{if $docs}}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b">
+              <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">File</th>
+              <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Tipe</th>
+              <th class="px-2 py-2 text-right text-xs font-medium text-muted-foreground">Ukuran</th>
+              <th class="px-2 py-2 text-right text-xs font-medium text-muted-foreground">Bagian</th>
+              <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Diunggah</th>
+              <th class="px-2 py-2 text-left text-xs font-medium text-muted-foreground">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $docs}}
+            <tr class="border-b last:border-0 hover-row">
+              <td class="px-2 py-2 font-medium"><span class="flex items-center gap-1.5">{{icon "file"}}{{.Filename}}</span></td>
+              <td class="px-2 py-2"><span class="badge badge-blue">{{.FileType}}</span></td>
+              <td class="px-2 py-2 text-right tabular-nums">{{filesize .SizeBytes}}</td>
+              <td class="px-2 py-2 text-right tabular-nums">{{.ChunkCount}}</td>
+              <td class="px-2 py-2 text-muted-foreground">{{ftime .CreatedAt}}</td>
+              <td class="px-2 py-2">
+                <form method="post" action="/admin/ai/knowledge/{{.ID}}/delete" onsubmit="return confirm('Hapus dokumen ini?')">
+                  <button type="submit"
+                    class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 text-destructive hover:bg-destructive/20 h-7 gap-1 px-2">
+                    {{icon "trash"}}Hapus
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="py-8 text-center text-sm text-muted-foreground">Belum ada data. Unggah katalog produk Anda di atas.</div>
+      {{end}}
+    </div>
+  </div>
+</div>
+
+<script>
+const presets = {{json .Data.Providers}};
+function applyPreset(sel) {
+  const p = presets.find(x => x.key === sel.value);
+  if (!p) return;
+  if (p.base_url) document.getElementById('base_url').value = p.base_url;
+  if (p.model) document.getElementById('model').value = p.model;
+}
+</script>
+{{end}}
+{{template "base" .}}

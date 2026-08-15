@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dirman/bot-admin-whatsapp/internal/ai"
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
 	"github.com/dirman/bot-admin-whatsapp/internal/gowaclient"
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
@@ -16,10 +17,11 @@ type Router struct {
 	store *store.Store
 	gowa  *gowaclient.Client
 	cfg   *config.Config
+	ai    *ai.Service
 }
 
-func New(st *store.Store, g *gowaclient.Client, cfg *config.Config) *Router {
-	return &Router{store: st, gowa: g, cfg: cfg}
+func New(st *store.Store, g *gowaclient.Client, cfg *config.Config, aiSvc *ai.Service) *Router {
+	return &Router{store: st, gowa: g, cfg: cfg, ai: aiSvc}
 }
 
 // WebhookPayload is the envelope gowa POSTs to our webhook endpoint.
@@ -140,6 +142,15 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 	if qr, err := r.store.GetQuickReplyByKeyword(ctx, normalized); err == nil && qr != nil {
 		r.reply(ctx, c, qr.Reply)
 		return
+	}
+
+	// Jawaban AI berbasis knowledge base (katalog, produk, dll.)
+	if r.ai != nil {
+		answer, err := r.ai.Answer(ctx, body)
+		if err == nil && answer != "" {
+			r.reply(ctx, c, answer)
+			return
+		}
 	}
 
 	r.reply(ctx, c, r.defaultReply())

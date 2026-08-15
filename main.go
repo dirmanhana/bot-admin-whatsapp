@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
+	"github.com/dirman/bot-admin-whatsapp/internal/ai"
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
 	"github.com/dirman/bot-admin-whatsapp/internal/dashboard"
 	"github.com/dirman/bot-admin-whatsapp/internal/gowaclient"
@@ -41,10 +42,11 @@ func main() {
 
 	st := store.New(pool)
 	gowa := gowaclient.New(cfg.GowaBaseURL, st)
-	rtr := router.New(st, gowa, cfg)
+	aiSvc := ai.New(st, cfg)
+	rtr := router.New(st, gowa, cfg, aiSvc)
 
 	// --- Dashboard admin ---
-	dash := dashboard.New(st, gowa, cfg, rtr)
+	dash := dashboard.New(st, gowa, cfg, rtr, aiSvc)
 
 	// --- Broadcast worker ---
 	go broadcastWorker(ctx, st, gowa, cfg)
@@ -53,6 +55,7 @@ func main() {
 	app := fiber.New(fiber.Config{
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
+		BodyLimit:    25 << 20, // 25 MB untuk upload knowledge base
 	})
 	app.Use(recover.New())
 	app.Use(logger.New())

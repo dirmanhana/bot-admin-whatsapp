@@ -12,6 +12,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/dirman/bot-admin-whatsapp/internal/ai"
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
 	"github.com/dirman/bot-admin-whatsapp/internal/gowaclient"
 	"github.com/dirman/bot-admin-whatsapp/internal/router"
@@ -23,11 +24,12 @@ type Server struct {
 	gowa  *gowaclient.Client
 	cfg   *config.Config
 	rtr   *router.Router
+	ai    *ai.Service
 	tpl   *templates
 }
 
-func New(st *store.Store, g *gowaclient.Client, cfg *config.Config, rtr *router.Router) *Server {
-	return &Server{store: st, gowa: g, cfg: cfg, rtr: rtr, tpl: loadTemplates()}
+func New(st *store.Store, g *gowaclient.Client, cfg *config.Config, rtr *router.Router, aiSvc *ai.Service) *Server {
+	return &Server{store: st, gowa: g, cfg: cfg, rtr: rtr, ai: aiSvc, tpl: loadTemplates()}
 }
 
 func (s *Server) Register(app *fiber.App) {
@@ -84,6 +86,12 @@ func (s *Server) Register(app *fiber.App) {
 	admin.Post("/accounts/:id/active", s.actionAccountActive)
 	admin.Post("/accounts/:id/webhook", s.actionAccountWebhook)
 	admin.Get("/accounts/:id/qr", s.pageAccountQR)
+
+	admin.Get("/ai", s.pageAI)
+	admin.Post("/ai", s.actionAISave)
+	admin.Post("/ai/test", s.actionAITest)
+	admin.Post("/ai/knowledge", s.actionKnowledgeUpload)
+	admin.Post("/ai/knowledge/:id/delete", s.actionKnowledgeDelete)
 }
 
 // ---------- auth ----------
@@ -156,6 +164,7 @@ var navItems = []navItem{
 	{"broadcast", "/admin/broadcast", "Broadcast", "megaphone"},
 	{"replies", "/admin/replies", "Balasan Cepat", "zap"},
 	{"accounts", "/admin/accounts", "Akun WA", "phone"},
+	{"ai", "/admin/ai", "AI & Data", "sparkles"},
 }
 
 func (s *Server) render(c *fiber.Ctx, name string, v view) error {

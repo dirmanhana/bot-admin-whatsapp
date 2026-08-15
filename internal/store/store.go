@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -607,4 +608,185 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		INSERT INTO settings (key, value) VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, value)
 	return err
+}
+
+// ---------- Knowledge base ----------
+
+type KnowledgeDoc struct {
+	ID         int64     `json:"id"`
+	Filename   string    `json:"filename"`
+	FileType   string    `json:"file_type"`
+	SizeBytes  int64     `json:"size_bytes"`
+	ChunkCount int       `json:"chunk_count"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (s *Store) ListKnowledgeDocs(ctx context.Context) ([]KnowledgeDoc, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, filename, file_type, size_bytes, chunk_count, created_at
+		FROM knowledge_docs ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KnowledgeDoc
+	for rows.Next() {
+		var d KnowledgeDoc
+		if err := rows.Scan(&d.ID, &d.Filename, &d.FileType, &d.SizeBytes, &d.ChunkCount, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddKnowledgeDoc(ctx context.Context, doc *KnowledgeDoc, data []byte) (int64, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO knowledge_docs (filename, file_type, size_bytes, chunk_count, data)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		doc.Filename, doc.FileType, doc.SizeBytes, doc.ChunkCount, data).Scan(&id)
+	return id, err
+}
+
+func (s *Store) AddKnowledgeChunks(ctx context.Context, docID int64, chunks []string) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, ch := range chunks {
+		if _, err := tx.Exec(ctx, `INSERT INTO knowledge_chunks (doc_id, content) VALUES ($1, $2)`, docID, ch); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE knowledge_docs SET chunk_count = $2 WHERE id = $1`, docID, len(chunks)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteKnowledgeDoc(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM knowledge_docs WHERE id = $1`, id)
+	return err
+}
+
+// SearchKnowledgeChunks returns the most relevant chunks for a question.
+// Ambil kandidat via full-text search (atau ILIKE sebagai cadangan), lalu
+// urutkan ulang di Go berdasarkan jumlah kata pertanyaan yang muncul.
+func (s *Store) SearchKnowledgeChunks(ctx context.Context, query string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+
+	words := queryWords(q)
+	if len(words) == 0 {
+		return nil, nil
+	}
+
+	candidates := map[int64]string{}
+
+	// 1) Full-text search
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, content FROM knowledge_chunks
+		WHERE to_tsvector('simple', content) @@ plainto_tsquery('simple', $1)
+		ORDER BY ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', $1)) DESC
+		LIMIT 20`, q)
+	if err == nil {
+		for rows.Next() {
+			var id int64
+			var c string
+			if err := rows.Scan(&id, &c); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			candidates[id] = c
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// 2) Cadangan: ILIKE bila full-text tidak menemukan cukup
+	if len(candidates) < limit {
+		where := ""
+		args := []any{}
+		for i, w := range words {
+			if i > 0 {
+				where += " OR "
+			}
+			where += fmt.Sprintf("content ILIKE $%d", i+1)
+			args = append(args, "%"+w+"%")
+		}
+		rows2, err := s.pool.Query(ctx, fmt.Sprintf(`
+			SELECT id, content FROM knowledge_chunks WHERE %s ORDER BY id DESC LIMIT 20`,
+			where), args...)
+		if err == nil {
+			for rows2.Next() {
+				var id int64
+				var c string
+				if err := rows2.Scan(&id, &c); err != nil {
+					rows2.Close()
+					return nil, err
+				}
+				if _, ok := candidates[id]; !ok {
+					candidates[id] = c
+				}
+			}
+			rows2.Close()
+		}
+	}
+
+	// 3) Ranking: jumlah kata pertanyaan yang muncul di chunk
+	type scored struct {
+		content string
+		score   int
+	}
+	all := make([]scored, 0, len(candidates))
+	for _, c := range candidates {
+		lc := strings.ToLower(c)
+		n := 0
+		for _, w := range words {
+			if strings.Contains(lc, w) {
+				n++
+			}
+		}
+		all = append(all, scored{content: c, score: n})
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].score != all[j].score {
+			return all[i].score > all[j].score
+		}
+		return len(all[i].content) < len(all[j].content)
+	})
+
+	out := make([]string, 0, limit)
+	for _, s := range all {
+		out = append(out, s.content)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// queryWords memecah pertanyaan menjadi kata penting (>= 3 huruf).
+func queryWords(q string) []string {
+	var words []string
+	for _, w := range strings.FieldsFunc(q, func(r rune) bool {
+		return r <= ' ' || r == ',' || r == '.' || r == ';' || r == ':' || r == '?' || r == '!' || r == '"' || r == '\''
+	}) {
+		w = strings.ToLower(strings.Trim(w, ".,;:!?\"'()[]{}-"))
+		if len([]rune(w)) >= 3 {
+			words = append(words, w)
+		}
+	}
+	return words
 }

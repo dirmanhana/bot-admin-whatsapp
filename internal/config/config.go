@@ -21,6 +21,10 @@ type Config struct {
 	SessionSecret     string
 	BroadcastDelay    time.Duration
 	StoreName         string
+	AIProvider        string
+	AIAPIKey          string
+	AIBaseURL         string
+	AIModel           string
 }
 
 func Load() (*Config, error) {
@@ -37,6 +41,10 @@ func Load() (*Config, error) {
 		DashboardPassword: getEnv("DASHBOARD_PASSWORD", "admin123"),
 		SessionSecret:     getEnv("SESSION_SECRET", "insecure-session-secret"),
 		StoreName:         getEnv("STORE_NAME", "Toko Kita"),
+		AIProvider:        getEnv("AI_PROVIDER", ""),
+		AIAPIKey:          getEnv("AI_API_KEY", ""),
+		AIBaseURL:         getEnv("AI_BASE_URL", ""),
+		AIModel:           getEnv("AI_MODEL", ""),
 	}
 
 	delaySec, err := strconv.Atoi(getEnv("BROADCAST_DELAY_SECONDS", "7"))
