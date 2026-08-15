@@ -250,11 +250,17 @@ func (c *Client) SendImage(ctx context.Context, phone, imagePath, caption string
 		b, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("gowa send/image gagal (status %d): %s", resp.StatusCode, string(b))
 	}
+	var wrapper Response
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return "", err
+	}
 	var out struct {
 		MessageID string `json:"message_id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+	if wrapper.Results != nil {
+		if err := json.Unmarshal(wrapper.Results, &out); err != nil {
+			return "", err
+		}
 	}
 	return out.MessageID, nil
 }
@@ -295,7 +301,16 @@ func (c *Client) getJSON(ctx context.Context, token, deviceID, path string, out 
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("gowa GET %s gagal (status %d): %s", path, resp.StatusCode, string(b))
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	var wrapper Response
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	if wrapper.Results != nil && out != nil {
+		if err := json.Unmarshal(wrapper.Results, out); err != nil {
+			return fmt.Errorf("decode results %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, token, deviceID, path string, body []byte, out any) error {
@@ -309,8 +324,14 @@ func (c *Client) doJSON(ctx context.Context, method, token, deviceID, path strin
 		return fmt.Errorf("gowa %s %s gagal (status %d): %s", method, path, resp.StatusCode, string(b))
 	}
 	if out != nil {
-		if err := json.Unmarshal(b, out); err != nil {
+		var wrapper Response
+		if err := json.Unmarshal(b, &wrapper); err != nil {
 			return fmt.Errorf("decode %s: %w", path, err)
+		}
+		if wrapper.Results != nil {
+			if err := json.Unmarshal(wrapper.Results, out); err != nil {
+				return fmt.Errorf("decode results %s: %w", path, err)
+			}
 		}
 	}
 	return nil

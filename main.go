@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,13 +72,20 @@ func main() {
 	})
 
 	app.Post("/webhook/gowa", func(c *fiber.Ctx) error {
-		// Verify shared secret if configured.
+		body := c.Body()
+		// Verify HMAC signature (X-Hub-Signature-256) if a secret is configured.
 		if cfg.GowaWebhookSecret != "" && cfg.GowaWebhookSecret != "secret" {
-			if c.Get("X-Webhook-Secret") != cfg.GowaWebhookSecret {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid webhook secret"})
+			sig := c.Get("X-Hub-Signature-256")
+			if sig == "" {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing webhook signature"})
+			}
+			mac := hmac.New(sha256.New, []byte(cfg.GowaWebhookSecret))
+			mac.Write(body)
+			expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+			if !hmac.Equal([]byte(sig), []byte(expected)) {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid webhook signature"})
 			}
 		}
-		body := c.Body()
 		// Acknowledge immediately; process asynchronously.
 		go rtr.HandleWebhook(context.Background(), body)
 		return c.SendStatus(fiber.StatusOK)
@@ -149,7 +160,12 @@ func sendBroadcast(ctx context.Context, st *store.Store, gowa *gowaclient.Client
 		if c.Status == "blocked" || c.Phone == "" || c.Phone == cfg.AdminPhone {
 			continue
 		}
-		if _, err := gowa.SendText(ctx, c.Phone, b.Message); err != nil {
+		// LID-based customers have no exposed phone number; use the full JID.
+		target := c.Phone
+		if strings.HasSuffix(c.JID, "@lid") {
+			target = c.JID
+		}
+		if _, err := gowa.SendText(ctx, target, b.Message); err != nil {
 			failed++
 		} else {
 			sent++

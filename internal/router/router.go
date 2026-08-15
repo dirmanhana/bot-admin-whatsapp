@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -54,17 +55,22 @@ type messagePayload struct {
 func (r *Router) HandleWebhook(ctx context.Context, body []byte) {
 	var wp WebhookPayload
 	if err := json.Unmarshal(body, &wp); err != nil {
+		log.Printf("webhook: unmarshal gagal: %v", err)
 		return
 	}
+	log.Printf("webhook: event=%s device=%s session=%s", wp.Event, wp.DeviceID, wp.Session)
 	if wp.Event != "message" || len(wp.Payload) == 0 {
 		return
 	}
 
 	var m messagePayload
 	if err := json.Unmarshal(wp.Payload, &m); err != nil {
+		log.Printf("webhook: unmarshal payload gagal: %v", err)
 		return
 	}
+	log.Printf("webhook: message from=%s chat=%s is_from_me=%v body=%q", m.From, m.ChatID, m.IsFromMe, truncate(m.Body, 60))
 	if m.IsFromMe || m.From == "" {
+		log.Printf("webhook: dilewati (is_from_me=%v from=%q)", m.IsFromMe, m.From)
 		return
 	}
 	if strings.HasSuffix(m.ChatID, "@g.us") || strings.HasSuffix(m.ChatID, "@broadcast") {
@@ -311,14 +317,15 @@ func (r *Router) SendOrderStatusUpdate(ctx context.Context, order *store.Order, 
 	}
 	msg := fmt.Sprintf("Halo %s! Pesanan *%s* Anda %s.\n\nTerima kasih telah berbelanja di *%s*! 💖",
 		order.Customer.Name, order.OrderNumber, label, r.cfg.StoreName)
-	_, err := r.gowa.SendText(ctx, order.Customer.Phone, msg)
+	_, err := r.gowa.SendText(ctx, WATarget(order.Customer), msg)
 	return err
 }
 
 // ---------- helpers ----------
 
 func (r *Router) reply(ctx context.Context, c *store.Customer, text string) {
-	if _, err := r.gowa.SendText(ctx, c.Phone, text); err != nil {
+	if _, err := r.gowa.SendText(ctx, WATarget(c), text); err != nil {
+		log.Printf("reply ke %s gagal: %v", c.Phone, err)
 		return
 	}
 	_ = r.store.SaveChatMessage(ctx, &store.ChatMessage{
@@ -358,6 +365,15 @@ func (r *Router) sendCatalog(ctx context.Context, c *store.Customer) {
 func (r *Router) defaultReply() string {
 	return fmt.Sprintf("Halo! 👋 Untuk melihat katalog produk kami, ketik *menu*.\n\n"+
 		"Kami di *%s* siap melayani Anda. Terima kasih! 💖", r.cfg.StoreName)
+}
+
+// truncate limits a string for safe logging.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func messageTypeOf(m messagePayload) string {

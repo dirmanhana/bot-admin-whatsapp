@@ -3,7 +3,22 @@ package router
 import (
 	"strconv"
 	"strings"
+
+	"github.com/dirman/bot-admin-whatsapp/internal/store"
 )
+
+// WATarget returns the address to use when replying to a customer: for
+// LID-based accounts (WhatsApp hides the phone number behind a @lid JID) it
+// returns the full JID, otherwise the plain phone number.
+func WATarget(c *store.Customer) string {
+	if c == nil {
+		return ""
+	}
+	if c.JID != "" && strings.HasSuffix(c.JID, "@lid") {
+		return c.JID
+	}
+	return c.Phone
+}
 
 // ExtractPhone returns the phone number part of a WhatsApp JID, dropping any
 // country-code suffix domain (e.g. "628123456789@s.whatsapp.net" -> "628123456789").
