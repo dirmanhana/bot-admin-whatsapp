@@ -109,10 +109,10 @@ func (s *Service) SaveSettings(ctx context.Context, st Settings) error {
 	return nil
 }
 
-// Answer menjawab pertanyaan pelanggan dengan konteks dari knowledge base.
-// Mengembalikan ("", nil) jika AI nonaktif/bermasalah agar pemanggil
-// bisa jatuh ke balasan default.
-func (s *Service) Answer(ctx context.Context, question string) (string, error) {
+// Answer menjawab pertanyaan pelanggan dengan konteks dari knowledge base
+// dan riwayat percakapan (memori). Mengembalikan ("", nil) jika AI
+// nonaktif/bermasalah agar pemanggil bisa jatuh ke balasan default.
+func (s *Service) Answer(ctx context.Context, question string, history []store.ChatMessage) (string, error) {
 	st, err := s.Settings(ctx)
 	if err != nil || !st.Enabled || st.APIKey == "" {
 		return "", nil
@@ -124,14 +124,26 @@ func (s *Service) Answer(ctx context.Context, question string) (string, error) {
 
 	client := NewClient(st.BaseURL, st.APIKey, st.Model)
 
-	chunks, err := s.store.SearchKnowledgeChunks(ctx, question, 5)
+	// Retrieval memakai pertanyaan + pesan terakhir sebelum pertanyaan ini,
+	// agar pertanyaan kontekstual ("yang tadi berapa?") tetap menemukan
+	// data produk yang sedang dibicarakan (baik dari pesan customer
+	// maupun balasan bot).
+	retrievalQuery := question
+	if len(history) >= 2 {
+		prev := history[len(history)-2]
+		if body := strings.TrimSpace(prev.Body); body != "" {
+			retrievalQuery += " " + body
+		}
+	}
+
+	chunks, err := s.store.SearchKnowledgeChunks(ctx, retrievalQuery, 5)
 	if err != nil {
 		log.Printf("ai: search knowledge: %v", err)
 	}
 	context := strings.Join(chunks, "\n\n---\n\n")
 
 	system := systemPrompt(s.cfg.StoreName, len(chunks) > 0)
-	prompt := promptFor(question, context)
+	prompt := promptFor(question, context, history)
 
 	answer, err := client.Chat(ctx, system, prompt)
 	if err != nil {
@@ -155,8 +167,17 @@ func systemPrompt(storeName string, hasData bool) string {
 		"Jangan mengarang informasi spesifik (harga, stok) karena belum ada data toko."
 }
 
-func promptFor(question, context string) string {
+func promptFor(question, context string, history []store.ChatMessage) string {
 	var b strings.Builder
+
+	// Memori: riwayat percakapan terakhir (paling baru di bawah).
+	hist := historyText(history, 8)
+	if hist != "" {
+		b.WriteString("RIWAYAT PERCAKAPAN (untuk konteks, yang terbaru di bawah):\n")
+		b.WriteString(hist)
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString("PERTANYAAN PELANGGAN:\n")
 	b.WriteString(question)
 	if context != "" {
@@ -164,6 +185,34 @@ func promptFor(question, context string) string {
 		b.WriteString(context)
 	}
 	return b.String()
+}
+
+// historyText menyusun riwayat pesan sebagai "Pelanggan: ..." / "Bot: ...".
+// Pesan terakhir (pertanyaan saat ini) diabaikan agar tidak ganda.
+func historyText(msgs []store.ChatMessage, max int) string {
+	if len(msgs) <= 1 {
+		return ""
+	}
+	msgs = msgs[:len(msgs)-1] // buang pesan terbaru (pertanyaan sekarang)
+	if len(msgs) > max {
+		msgs = msgs[len(msgs)-max:]
+	}
+	var b strings.Builder
+	for _, m := range msgs {
+		body := strings.TrimSpace(m.Body)
+		if body == "" || len([]rune(body)) > 300 {
+			continue
+		}
+		switch m.Direction {
+		case "in":
+			b.WriteString("Pelanggan: ")
+		default:
+			b.WriteString("Bot: ")
+		}
+		b.WriteString(body)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func firstNonEmpty(vals ...string) string {

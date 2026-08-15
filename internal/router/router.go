@@ -144,9 +144,13 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 		return
 	}
 
-	// Jawaban AI berbasis knowledge base (katalog, produk, dll.)
+	// Jawaban AI berbasis knowledge base (katalog, produk, dll.) + memori percakapan
 	if r.ai != nil {
-		answer, err := r.ai.Answer(ctx, body)
+		history, err := r.store.ListChatMessages(ctx, c.ID, 15)
+		if err != nil {
+			history = nil
+		}
+		answer, err := r.ai.Answer(ctx, body, history)
 		if err == nil && answer != "" {
 			r.reply(ctx, c, answer)
 			return
