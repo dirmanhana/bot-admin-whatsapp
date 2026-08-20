@@ -180,10 +180,20 @@ func (s *Store) RegenerateTenantWebhookSecret(ctx context.Context, id int64) err
 	return err
 }
 
-// SeedTenant1 membuat tenant pertama (data lama) bila belum ada. Dipanggil
-// sekali saat startup. Sequence id ikut disetel agar tenant berikutnya
+// SeedTenant1 membuat tenant pertama (dari DASHBOARD_USER/PASSWORD di .env)
+// HANYA saat tabel tenants masih kosong (instalasi baru). Tidak menyala
+// ulang tenant yang sudah dihapus; operator cukup daftar ulang lewat
+// /admin/register. Sequence id ikut disetel agar tenant berikutnya
 // (registrasi) tidak bentrok dengan id 1.
 func (s *Store) SeedTenant1(ctx context.Context, email, passwordHash string) error {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM tenants`)).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil // sudah ada tenant (mis. tenant 1 dihapus sengaja) — jangan dibangkitkan lagi
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -191,8 +201,7 @@ func (s *Store) SeedTenant1(ctx context.Context, email, passwordHash string) err
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, s.q(`
 		INSERT INTO tenants (id, email, password_hash, status, session_epoch, webhook_secret)
-		VALUES (1, $1, $2, 'active', 0, $3)
-		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, updated_at = $4`), email, passwordHash, randomSecret(), time.Now()); err != nil {
+		VALUES (1, $1, $2, 'active', 0, $3)`), email, passwordHash, randomSecret()); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, s.q(`SELECT setval('tenants_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM tenants), 1))`)); err != nil {

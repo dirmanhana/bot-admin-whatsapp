@@ -19,3 +19,6 @@
 
 # upload gambar produk
 /data/
+
+# backup .env (rahasia)
+*.env.bak*
