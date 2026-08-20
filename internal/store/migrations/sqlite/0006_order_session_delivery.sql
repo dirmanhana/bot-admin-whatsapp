@@ -1,0 +1,1 @@
+ALTER TABLE order_sessions ADD COLUMN delivery_type TEXT NOT NULL DEFAULT 'kirim';

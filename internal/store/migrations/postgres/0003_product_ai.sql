@@ -1,0 +1,2 @@
+ALTER TABLE products ADD COLUMN purchase_link TEXT NOT NULL DEFAULT '';
+ALTER TABLE products ADD COLUMN ai_prompt TEXT NOT NULL DEFAULT '';

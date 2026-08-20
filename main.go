@@ -21,6 +21,7 @@ import (
 	"github.com/dirman/bot-admin-whatsapp/internal/dashboard"
 	"github.com/dirman/bot-admin-whatsapp/internal/gowaclient"
 	"github.com/dirman/bot-admin-whatsapp/internal/router"
+	"github.com/dirman/bot-admin-whatsapp/internal/settings"
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
 )
 
@@ -49,15 +50,22 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
+	if cfg.UploadDir != "" {
+		if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
+			log.Printf("warn: buat direktori upload: %v", err)
+		}
+	}
+
 	gowa := gowaclient.New(cfg.GowaBaseURL, st)
-	aiSvc := ai.New(st, cfg)
-	rtr := router.New(st, gowa, cfg, aiSvc)
+	stg := settings.New(st, cfg)
+	aiSvc := ai.New(st, cfg, stg)
+	rtr := router.New(st, gowa, cfg, aiSvc, stg)
 
 	// --- Dashboard admin ---
-	dash := dashboard.New(st, gowa, cfg, rtr, aiSvc)
+	dash := dashboard.New(st, gowa, cfg, rtr, aiSvc, stg)
 
 	// --- Broadcast worker ---
-	go broadcastWorker(ctx, st, gowa, cfg)
+	go broadcastWorker(ctx, st, gowa, cfg, stg)
 
 	// --- HTTP server ---
 	app := fiber.New(fiber.Config{
@@ -115,7 +123,7 @@ func main() {
 
 // broadcastWorker periodically picks up pending broadcasts and sends them
 // to the target customers with a delay between each message.
-func broadcastWorker(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config) {
+func broadcastWorker(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config, stg *settings.Service) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
@@ -124,12 +132,12 @@ func broadcastWorker(ctx context.Context, st *store.Store, gowa *gowaclient.Clie
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runPendingBroadcasts(ctx, st, gowa, cfg)
+			runPendingBroadcasts(ctx, st, gowa, cfg, stg)
 		}
 	}
 }
 
-func runPendingBroadcasts(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config) {
+func runPendingBroadcasts(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config, stg *settings.Service) {
 	broadcasts, err := st.ListBroadcasts(ctx)
 	if err != nil {
 		log.Printf("broadcast: list: %v", err)
@@ -139,11 +147,21 @@ func runPendingBroadcasts(ctx context.Context, st *store.Store, gowa *gowaclient
 		if b.Status != "pending" {
 			continue
 		}
-		go sendBroadcast(ctx, st, gowa, cfg, b)
+		go sendBroadcast(ctx, st, gowa, cfg, stg, b)
 	}
 }
 
-func sendBroadcast(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config, b store.Broadcast) {
+// adminPhone mengambil nomor admin dari pengaturan toko; jatuh ke .env saat gagal.
+func adminPhone(ctx context.Context, stg *settings.Service, cfg *config.Config) string {
+	if stg != nil {
+		if st, err := stg.Get(ctx); err == nil && st.AdminPhone != "" {
+			return st.AdminPhone
+		}
+	}
+	return cfg.AdminPhone
+}
+
+func sendBroadcast(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config, stg *settings.Service, b store.Broadcast) {
 	if err := st.SetBroadcastRunning(ctx, b.ID); err != nil {
 		log.Printf("broadcast %d: mark running: %v", b.ID, err)
 		return
@@ -161,7 +179,7 @@ func sendBroadcast(ctx context.Context, st *store.Store, gowa *gowaclient.Client
 		if ctx.Err() != nil {
 			break
 		}
-		if c.Status == "blocked" || c.Phone == "" || c.Phone == cfg.AdminPhone {
+		if c.Status == "blocked" || c.Phone == "" || c.Phone == adminPhone(ctx, stg, cfg) {
 			continue
 		}
 		// LID-based customers have no exposed phone number; use the full JID.

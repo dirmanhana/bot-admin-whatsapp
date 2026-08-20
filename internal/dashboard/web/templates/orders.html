@@ -34,6 +34,7 @@
           </td>
           <td class="px-2 py-2">
             {{range .Items}}{{.ProductName}} × {{.Qty}}<div class="text-xs text-muted-foreground">{{price .Price}}</div>{{end}}
+            {{if .Items}}<div class="mt-1 text-xs text-muted-foreground">{{if eq .DeliveryType "ambil"}}🏬 Ambil di toko{{else}}🚚 Kirim{{if .DeliveryFee}} · ongkir {{price .DeliveryFee}}{{end}}{{end}}</div>{{end}}
           </td>
           <td class="px-2 py-2 text-right tabular-nums">{{price .Total}}</td>
           <td class="px-2 py-2"><span class="badge {{badge .Status}}">{{statusLabel .Status}}</span></td>

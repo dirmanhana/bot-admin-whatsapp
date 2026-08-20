@@ -41,18 +41,23 @@ func ProviderByKey(key string) *Provider {
 
 // Client berbicara ke endpoint /chat/completions gaya OpenAI.
 type Client struct {
-	BaseURL string
-	APIKey  string
-	Model   string
-	http    *http.Client
+	BaseURL   string
+	APIKey    string
+	Model     string
+	MaxTokens int
+	http      *http.Client
 }
 
-func NewClient(baseURL, apiKey, model string) *Client {
+func NewClient(baseURL, apiKey, model string, maxTokens int) *Client {
+	if maxTokens <= 0 {
+		maxTokens = 600
+	}
 	return &Client{
-		BaseURL: strings.TrimSuffix(strings.TrimSpace(baseURL), "/"),
-		APIKey:  strings.TrimSpace(apiKey),
-		Model:   strings.TrimSpace(model),
-		http:    &http.Client{Timeout: 90 * time.Second},
+		BaseURL:   strings.TrimSuffix(strings.TrimSpace(baseURL), "/"),
+		APIKey:    strings.TrimSpace(apiKey),
+		Model:     strings.TrimSpace(model),
+		MaxTokens: maxTokens,
+		http:      &http.Client{Timeout: 90 * time.Second},
 	}
 }
 
@@ -73,7 +78,7 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 			{Role: "user", Content: user},
 		},
 		"temperature": 0.3,
-		"max_tokens":  600,
+		"max_tokens":  c.MaxTokens,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(payload))

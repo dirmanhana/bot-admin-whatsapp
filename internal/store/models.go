@@ -14,15 +14,16 @@ type Customer struct {
 }
 
 type Product struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Price       int64     `json:"price"`
-	ImagePath   string    `json:"image_path"`
-	Stock       int       `json:"stock"`
-	IsActive    bool      `json:"is_active"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	Price        int64     `json:"price"`
+	ImagePath    string    `json:"image_path"`
+	Stock        int       `json:"stock"`
+	IsActive     bool      `json:"is_active"`
+	PurchaseLink string    `json:"purchase_link"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type OrderItem struct {
@@ -35,17 +36,19 @@ type OrderItem struct {
 }
 
 type Order struct {
-	ID          int64       `json:"id"`
-	OrderNumber string      `json:"order_number"`
-	CustomerID  int64       `json:"customer_id"`
-	Status      string      `json:"status"`
-	Total       int64       `json:"total"`
-	Address     string      `json:"address"`
-	Note        string      `json:"note"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	Customer    *Customer   `json:"customer,omitempty"`
-	Items       []OrderItem `json:"items,omitempty"`
+	ID           int64       `json:"id"`
+	OrderNumber  string      `json:"order_number"`
+	CustomerID   int64       `json:"customer_id"`
+	Status       string      `json:"status"`
+	Total        int64       `json:"total"`
+	Address      string      `json:"address"`
+	DeliveryType string      `json:"delivery_type"`
+	DeliveryFee  int64       `json:"delivery_fee"`
+	Note         string      `json:"note"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	Customer     *Customer   `json:"customer,omitempty"`
+	Items        []OrderItem `json:"items,omitempty"`
 }
 
 type ChatMessage struct {
@@ -82,12 +85,14 @@ type Broadcast struct {
 }
 
 type OrderSession struct {
-	CustomerID int64     `json:"customer_id"`
-	State      string    `json:"state"`
-	ProductID  int64     `json:"product_id"`
-	Qty        int       `json:"qty"`
-	Address    string    `json:"address"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CustomerID   int64       `json:"customer_id"`
+	State        string      `json:"state"`
+	ProductID    int64       `json:"product_id"`
+	Qty          int         `json:"qty"`
+	Address      string      `json:"address"`
+	DeliveryType string      `json:"delivery_type"`
+	Items        []OrderItem `json:"items"`
+	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
 type WAAccount struct {

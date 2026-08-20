@@ -1,0 +1,104 @@
+{{define "content"}}
+{{$st := .Data.Settings}}
+
+<div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
+  <div class="mb-3 flex items-center gap-2">
+    {{icon "settings"}}<h2 class="font-heading text-sm font-semibold tracking-tight">Pengaturan Toko</h2>
+  </div>
+  <p class="mb-3 text-sm text-muted-foreground">Nama toko, alamat, nomor kontak admin, jam operasional, metode pembayaran, dan persona AI dipakai di pesan bot (katalog, konfirmasi pesanan, jawaban AI) dan notifikasi order baru. Nilai di sini menang atas <code>.env</code>.</p>
+  <form method="post" action="/admin/settings" class="flex max-w-2xl flex-col gap-1">
+    <div class="flex flex-col gap-1">
+      <label class="text-sm text-muted-foreground">Nama Toko</label>
+      <input name="store_name" value="{{$st.StoreName}}" required placeholder="mis. Toko Kita"
+        class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+    </div>
+    <div class="mt-2 flex flex-col gap-1">
+      <label class="text-sm text-muted-foreground">Alamat Toko</label>
+      <textarea name="store_address" rows="3" placeholder="mis. Jl. Merdeka No. 12, Bandung"
+        class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">{{$st.StoreAddress}}</textarea>
+    </div>
+    <div class="mt-2 flex flex-col gap-1">
+      <label class="text-sm text-muted-foreground">Nomor Kontak Admin (WhatsApp)</label>
+      <input name="admin_phone" value="{{$st.AdminPhone}}" placeholder="mis. 628123456789"
+        class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      <span class="text-xs text-muted-foreground">Format internasional tanpa <code>+</code>. Nomor ini menerima notifikasi order baru &amp; perintah admin (mis. <code>/ringkasan</code>).</span>
+    </div>
+    <div class="mt-2 grid gap-3 grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Jam Operasional</label>
+        <input name="store_hours" value="{{$st.StoreHours}}" placeholder="mis. Senin–Sabtu 08.00–17.00"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Metode Pembayaran</label>
+        <input name="payment_methods" value="{{$st.PaymentMethods}}" placeholder="mis. Transfer BCA, QRIS"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Ongkir (Rp, 0 = gratis)</label>
+        <input name="delivery_fee" value="{{$st.DeliveryFee}}" type="number" min="0" placeholder="mis. 10000"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+    </div>
+
+    <div class="mt-5 mb-1 flex items-center gap-2">
+      {{icon "sparkles"}}<h3 class="font-heading text-sm font-semibold tracking-tight">Persona AI</h3>
+    </div>
+    <p class="mb-3 text-sm text-muted-foreground">Dipakai bot saat menjawab pertanyaan pelanggan.</p>
+    <div class="grid gap-3 grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Nama AI (opsional)</label>
+        <input name="ai_name" value="{{$st.AIName}}" placeholder="mis. Rara"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Personality (opsional)</label>
+        <input name="ai_personality" value="{{$st.AIPersonality}}" placeholder="mis. santai, ramah & humoris"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+    </div>
+
+    <div class="mt-5 mb-1 flex items-center gap-2">
+      {{icon "zap"}}<h3 class="font-heading text-sm font-semibold tracking-tight">Batasi Biaya AI</h3>
+    </div>
+    <p class="mb-3 text-sm text-muted-foreground">Kendalikan pemakaian API AI agar biaya terkendali. Nilai di sini menang atas <code>.env</code>.</p>
+    <div class="grid gap-3 grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Kuota per Pelanggan per Hari (0 = tanpa batas)</label>
+        <input name="ai_daily_quota" value="{{$st.AIDailyQuota}}" type="number" min="0"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Maks. Token Jawaban</label>
+        <input name="ai_max_tokens" value="{{$st.AIMaxTokens}}" type="number" min="1"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+    </div>
+
+    <div class="mt-5 mb-1 flex items-center gap-2">
+      {{icon "lock"}}<h3 class="font-heading text-sm font-semibold tracking-tight">Keamanan</h3>
+    </div>
+    <p class="mb-3 text-sm text-muted-foreground">Ubah kata sandi dashboard. Kata sandi disimpan terenkripsi di database dan menang atas <code>DASHBOARD_PASSWORD</code> di <code>.env</code>.</p>
+    <div class="grid gap-3 grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Password Saat Ini</label>
+        <input name="current_password" type="password" autocomplete="current-password"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Password Baru (min. 8 karakter)</label>
+        <input name="new_password" type="password" autocomplete="new-password"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+    </div>
+
+    <div class="mt-3 flex gap-2">
+      <button type="submit"
+        class="inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">
+        {{icon "save"}}Simpan
+      </button>
+    </div>
+  </form>
+</div>
+{{end}}
+{{template "base" .}}

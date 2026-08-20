@@ -166,6 +166,7 @@ Lihat [.env.example](.env.example) untuk template lengkap.
 | `AI_MODEL` | — | Nama model |
 
 > Nilai AI juga bisa diatur dari **Dashboard → AI & Data** (tersimpan di DB dan menang atas `.env`).
+> Nama toko, alamat, dan nomor admin juga bisa diatur dari **Dashboard → Pengaturan** (tersimpan di DB dan menang atas `.env`).
 
 ---
 
@@ -193,6 +194,7 @@ Akses `http://localhost:8080/admin` (login `DASHBOARD_USER`/`DASHBOARD_PASSWORD`
 | **Balasan Cepat** | Kata kunci → balasan otomatis |
 | **Akun WA** | Kelola akun gowa, QR login, webhook |
 | **AI & Data** | Konfigurasi LLM + upload knowledge base |
+| **Pengaturan** | Set nama toko, alamat, jam operasional, metode pembayaran, ongkir, persona AI (nama & personality), & ganti password dashboard |
 
 ---
 
@@ -315,6 +317,7 @@ Semua di bawah `/admin` — lihat [docs/api.md](docs/api.md) untuk detail lengka
 | POST | `/admin/broadcast`, `/admin/replies`, `/admin/replies/:id/toggle`, `/admin/replies/:id/delete` | Broadcast & balasan |
 | POST | `/admin/accounts`, `/admin/accounts/:id/active`, `/admin/accounts/:id/webhook`, GET `/admin/accounts/:id/qr` | Akun gowa |
 | POST | `/admin/ai`, `/admin/ai/test`, `/admin/ai/knowledge` (multipart), `/admin/ai/knowledge/:id/delete` | AI & knowledge base |
+| GET/POST | `/admin/settings` | Pengaturan toko (nama, alamat, nomor admin, jam operasional, pembayaran, ongkir, persona AI, password dashboard) |
 | GET | `/admin/static/*` | Aset statis (CSS) |
 
 ---

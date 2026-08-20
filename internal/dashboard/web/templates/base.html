@@ -47,6 +47,7 @@
       </header>
 
       <div class="flex flex-col gap-4 p-4 md:p-6">
+        {{if .Banner}}<div class="flash flash-warn">{{.Banner}}</div>{{end}}
         {{if .Msg}}<div class="flash flash-ok">{{.Msg}}</div>{{end}}
         {{if .Err}}<div class="flash flash-err">{{.Err}}</div>{{end}}
         {{template "content" .}}

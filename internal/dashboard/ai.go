@@ -65,7 +65,11 @@ func (s *Server) actionAITest(c *fiber.Ctx) error {
 	if st.APIKey == "" {
 		return redirect(c, "/admin/ai", "API key belum diisi.", true)
 	}
-	client := ai.NewClient(st.BaseURL, st.APIKey, st.Model)
+	maxTokens := s.cfg.AIMaxTokens
+	if stt, err := s.settings.Get(ctx); err == nil && stt.AIMaxTokens > 0 {
+		maxTokens = stt.AIMaxTokens
+	}
+	client := ai.NewClient(st.BaseURL, st.APIKey, st.Model, maxTokens)
 	if err := client.Test(ctx); err != nil {
 		return redirect(c, "/admin/ai", "Tes gagal: "+err.Error(), true)
 	}

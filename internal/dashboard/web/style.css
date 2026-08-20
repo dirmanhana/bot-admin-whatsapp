@@ -15,6 +15,7 @@
 .flash{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:var(--radius);font-size:13.5px;line-height:1.4}
 .flash-ok{background:color-mix(in oklch,var(--live) 12%,transparent);color:color-mix(in oklch,var(--live) 55%,black)}
 .flash-err{background:color-mix(in oklch,var(--destructive) 10%,transparent);color:var(--destructive)}
+.flash-warn{background:color-mix(in oklch,oklch(60% .12 70) 12%,transparent);color:oklch(45% .12 70)}
 
 /* chat bubbles */
 .chat{display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto;padding:2px}

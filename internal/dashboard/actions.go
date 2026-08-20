@@ -2,8 +2,12 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -11,11 +15,17 @@ import (
 )
 
 func (s *Server) actionLogin(c *fiber.Ctx) error {
+	ip := c.IP()
+	if s.isLoginLocked(ip) {
+		return redirect(c, "/admin/login", "Terlalu banyak percobaan login. Coba lagi nanti.", true)
+	}
 	u := c.FormValue("username")
 	p := c.FormValue("password")
-	if u != s.cfg.DashboardUser || p != s.cfg.DashboardPassword {
+	if u != s.cfg.DashboardUser || !s.verifyPassword(c.Context(), p) {
+		s.recordLoginFail(ip)
 		return redirect(c, "/admin/login", "Username atau password salah.", true)
 	}
+	s.clearLoginFails(ip)
 	s.setSession(c)
 	return c.Redirect("/admin/overview")
 }
@@ -48,19 +58,21 @@ func (s *Server) actionOrderStatus(c *fiber.Ctx) error {
 // ---------- products ----------
 
 type productForm struct {
-	Name        string
-	Description string
-	Price       int64
-	Stock       int
-	ImagePath   string
-	IsActive    bool
+	Name         string
+	Description  string
+	Price        int64
+	Stock        int
+	ImagePath    string
+	IsActive     bool
+	PurchaseLink string
 }
 
 func (s *Server) parseProduct(c *fiber.Ctx) (productForm, string) {
 	f := productForm{
-		Name:        strings.TrimSpace(c.FormValue("name")),
-		Description: strings.TrimSpace(c.FormValue("description")),
-		ImagePath:   strings.TrimSpace(c.FormValue("image_path")),
+		Name:         strings.TrimSpace(c.FormValue("name")),
+		Description:  strings.TrimSpace(c.FormValue("description")),
+		ImagePath:    strings.TrimSpace(c.FormValue("image_path")),
+		PurchaseLink: strings.TrimSpace(c.FormValue("purchase_link")),
 	}
 	priceStr := strings.ReplaceAll(strings.TrimSpace(c.FormValue("price")), ".", "")
 	p, err := strconv.ParseInt(priceStr, 10, 64)
@@ -89,9 +101,17 @@ func (s *Server) actionProductCreate(c *fiber.Ctx) error {
 	if errMsg != "" {
 		return redirect(c, "/admin/products", errMsg, true)
 	}
+	img, err := s.saveProductImage(c)
+	if err != nil {
+		return redirect(c, "/admin/products", err.Error(), true)
+	}
+	if img == "" {
+		img = f.ImagePath
+	}
 	if _, err := s.store.CreateProduct(context.Background(), &store.Product{
 		Name: f.Name, Description: f.Description, Price: f.Price,
-		Stock: f.Stock, ImagePath: f.ImagePath, IsActive: true,
+		Stock: f.Stock, ImagePath: img, IsActive: true,
+		PurchaseLink: f.PurchaseLink,
 	}); err != nil {
 		return redirect(c, "/admin/products", "Gagal menyimpan produk: "+err.Error(), true)
 	}
@@ -107,9 +127,22 @@ func (s *Server) actionProductUpdate(c *fiber.Ctx) error {
 	if errMsg != "" {
 		return redirect(c, "/admin/products", errMsg, true)
 	}
+	existing, _ := s.store.GetProduct(context.Background(), id)
+	img, err := s.saveProductImage(c)
+	if err != nil {
+		return redirect(c, "/admin/products", err.Error(), true)
+	}
+	if img != "" {
+		if existing != nil {
+			s.deleteProductImage(existing.ImagePath)
+		}
+	} else {
+		img = f.ImagePath
+	}
 	if err := s.store.UpdateProduct(context.Background(), &store.Product{
 		ID: id, Name: f.Name, Description: f.Description, Price: f.Price,
-		Stock: f.Stock, ImagePath: f.ImagePath, IsActive: f.IsActive,
+		Stock: f.Stock, ImagePath: img, IsActive: f.IsActive,
+		PurchaseLink: f.PurchaseLink,
 	}); err != nil {
 		return redirect(c, "/admin/products", "Gagal memperbarui produk: "+err.Error(), true)
 	}
@@ -121,10 +154,51 @@ func (s *Server) actionProductDelete(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("id tidak valid")
 	}
+	if existing, err := s.store.GetProduct(context.Background(), id); err == nil && existing != nil {
+		s.deleteProductImage(existing.ImagePath)
+	}
 	if err := s.store.DeleteProduct(context.Background(), id); err != nil {
 		return redirect(c, "/admin/products", "Gagal menghapus produk: "+err.Error(), true)
 	}
 	return redirect(c, "/admin/products", "Produk dihapus.", false)
+}
+
+// allowedImgExts adalah ekstensi gambar yang boleh diunggah.
+var allowedImgExts = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".avif": true,
+}
+
+// saveProductImage menyimpan gambar produk ke direktori upload dan
+// mengembalikan URL publik-nya. Bila tidak ada file, mengembalikan "".
+func (s *Server) saveProductImage(c *fiber.Ctx) (string, error) {
+	fh, err := c.FormFile("image")
+	if err != nil {
+		return "", nil
+	}
+	ext := strings.ToLower(filepath.Ext(fh.Filename))
+	if !allowedImgExts[ext] {
+		return "", fmt.Errorf("format gambar tidak didukung (jpg, jpeg, png, gif, webp, avif)")
+	}
+	if fh.Size > 5*1024*1024 {
+		return "", fmt.Errorf("gambar maksimal 5 MB")
+	}
+	if err := os.MkdirAll(s.cfg.UploadDir, 0o755); err != nil {
+		return "", err
+	}
+	name := fmt.Sprintf("p%d%s", time.Now().UnixNano(), ext)
+	if err := c.SaveFile(fh, filepath.Join(s.cfg.UploadDir, name)); err != nil {
+		return "", err
+	}
+	return "/admin/uploads/" + name, nil
+}
+
+// deleteProductImage menghapus file gambar produk lama bila merupakan
+// hasil upload (bukan URL/path manual).
+func (s *Server) deleteProductImage(path string) {
+	if !strings.HasPrefix(path, "/admin/uploads/") {
+		return
+	}
+	_ = os.Remove(filepath.Join(s.cfg.UploadDir, filepath.Base(path)))
 }
 
 // ---------- customers ----------
@@ -158,8 +232,12 @@ func (s *Server) actionBroadcastCreate(c *fiber.Ctx) error {
 		return redirect(c, "/admin/broadcast", "Gagal menghitung target: "+err.Error(), true)
 	}
 	targets := 0
+	adminPhone := s.cfg.AdminPhone
+	if st, err := s.settings.Get(ctx); err == nil && st.AdminPhone != "" {
+		adminPhone = st.AdminPhone
+	}
 	for _, cust := range customers {
-		if cust.Status == "active" && cust.Phone != "" && cust.Phone != s.cfg.AdminPhone {
+		if cust.Status == "active" && cust.Phone != "" && cust.Phone != adminPhone {
 			targets++
 		}
 	}

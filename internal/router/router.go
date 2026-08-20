@@ -5,24 +5,55 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dirman/bot-admin-whatsapp/internal/ai"
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
 	"github.com/dirman/bot-admin-whatsapp/internal/gowaclient"
+	"github.com/dirman/bot-admin-whatsapp/internal/settings"
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
 )
 
 type Router struct {
-	store *store.Store
-	gowa  *gowaclient.Client
-	cfg   *config.Config
-	ai    *ai.Service
+	store    *store.Store
+	gowa     *gowaclient.Client
+	cfg      *config.Config
+	ai       *ai.Service
+	settings *settings.Service
+	redact   bool
 }
 
-func New(st *store.Store, g *gowaclient.Client, cfg *config.Config, aiSvc *ai.Service) *Router {
-	return &Router{store: st, gowa: g, cfg: cfg, ai: aiSvc}
+func New(st *store.Store, g *gowaclient.Client, cfg *config.Config, aiSvc *ai.Service, stg *settings.Service) *Router {
+	return &Router{store: st, gowa: g, cfg: cfg, ai: aiSvc, settings: stg, redact: cfg.LogRedact}
+}
+
+// maskPhone menyamarkan nomor saat log redaksi aktif: 62812xxxx789.
+func (r *Router) maskPhone(p string) string {
+	if !r.redact || len(p) < 7 {
+		return p
+	}
+	keep := 4
+	return p[:keep] + strings.Repeat("x", len(p)-keep-3) + p[len(p)-3:]
+}
+
+// maskBody menyamarkan isi pesan saat log redaksi aktif.
+func (r *Router) maskBody(s string) string {
+	if !r.redact {
+		return s
+	}
+	s = truncate(s, 60)
+	return "[redaksi " + strconv.Itoa(len([]rune(s))) + " karakter]"
+}
+
+// storeSettings mengambil pengaturan toko; saat gagal, jatuh ke .env.
+func (r *Router) storeSettings(ctx context.Context) *settings.Settings {
+	st, err := r.settings.Get(ctx)
+	if err != nil {
+		return &settings.Settings{StoreName: r.cfg.StoreName, AdminPhone: r.cfg.AdminPhone}
+	}
+	return st
 }
 
 // WebhookPayload is the envelope gowa POSTs to our webhook endpoint.
@@ -68,9 +99,9 @@ func (r *Router) HandleWebhook(ctx context.Context, body []byte) {
 		log.Printf("webhook: unmarshal payload gagal: %v", err)
 		return
 	}
-	log.Printf("webhook: message from=%s chat=%s is_from_me=%v body=%q", m.From, m.ChatID, m.IsFromMe, truncate(m.Body, 60))
+	log.Printf("webhook: message from=%s chat=%s is_from_me=%v body=%q", r.maskPhone(m.From), r.maskPhone(m.ChatID), m.IsFromMe, r.maskBody(m.Body))
 	if m.IsFromMe || m.From == "" {
-		log.Printf("webhook: dilewati (is_from_me=%v from=%q)", m.IsFromMe, m.From)
+		log.Printf("webhook: dilewati (is_from_me=%v from=%q)", m.IsFromMe, r.maskPhone(m.From))
 		return
 	}
 	if strings.HasSuffix(m.ChatID, "@g.us") || strings.HasSuffix(m.ChatID, "@broadcast") {
@@ -114,7 +145,7 @@ func (r *Router) HandleWebhook(ctx context.Context, body []byte) {
 	}
 
 	// Admin commands
-	if phone == r.cfg.AdminPhone && strings.HasPrefix(text, "/") {
+	if phone == r.storeSettings(ctx).AdminPhone && strings.HasPrefix(text, "/") {
 		r.handleAdminCommand(ctx, customer, text)
 		return
 	}
@@ -152,12 +183,21 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 
 	// Jawaban AI berbasis knowledge base (katalog, produk, dll.) + memori percakapan
 	if r.ai != nil {
+// Kuota harian per pelanggan agar biaya AI terkendali.
+	day := time.Now().Format("2006-01-02")
+	quota := r.storeSettings(ctx).AIDailyQuota
+	used, err := r.store.GetAIUsageCount(ctx, c.ID, day)
+	if err == nil && quota > 0 && used >= quota {
+		r.reply(ctx, c, "Maaf, pertanyaan gratis hari ini sudah habis. Hubungi admin untuk bantuan lebih lanjut.")
+		return
+	}
 		history, err := r.store.ListChatMessages(ctx, c.ID, 15)
 		if err != nil {
 			history = nil
 		}
 		answer, err := r.ai.Answer(ctx, body, history)
 		if err == nil && answer != "" {
+			_ = r.store.IncrementAIUsage(ctx, c.ID, day)
 			r.reply(ctx, c, answer)
 			return
 		}
@@ -167,6 +207,12 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 }
 
 func (r *Router) handleOrderSession(ctx context.Context, c *store.Customer, session *store.OrderSession, body, normalized string) {
+	if normalized == "batal" || normalized == "cancel" {
+		_ = r.store.DeleteOrderSession(ctx, c.ID)
+		r.reply(ctx, c, "Pesanan dibatalkan. Ketik *menu* kapan saja untuk melihat katalog.")
+		return
+	}
+
 	switch session.State {
 	case "selecting_product":
 		idx := ParseNumber(normalized)
@@ -182,11 +228,10 @@ func (r *Router) handleOrderSession(ctx context.Context, c *store.Customer, sess
 		p := products[idx-1]
 		if p.Stock >= 0 && p.Stock <= 0 {
 			r.reply(ctx, c, fmt.Sprintf("Maaf, %s sedang *habis*.", p.Name))
-			_ = r.store.DeleteOrderSession(ctx, c.ID)
 			return
 		}
 		_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
-			CustomerID: c.ID, State: "entering_qty", ProductID: p.ID, Qty: 1,
+			CustomerID: c.ID, State: "entering_qty", ProductID: p.ID, Qty: 1, Items: session.Items,
 		})
 		r.reply(ctx, c, fmt.Sprintf("Anda memilih *%s* — %s.\n\nBerapa jumlah yang ingin dipesan? (mis. *2*)", p.Name, FormatPrice(p.Price)))
 
@@ -206,33 +251,79 @@ func (r *Router) handleOrderSession(ctx context.Context, c *store.Customer, sess
 			r.reply(ctx, c, fmt.Sprintf("Maaf, stok %s hanya %d. Masukkan jumlah yang lebih kecil.", p.Name, p.Stock))
 			return
 		}
+		items := addToCart(session.Items, p.ID, p.Name, p.Price, qty)
 		_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
-			CustomerID: c.ID, State: "entering_address", ProductID: p.ID, Qty: qty,
+			CustomerID: c.ID, State: "more_or_checkout", Items: items,
+		})
+		r.reply(ctx, c, r.cartMessage(ctx, c, items)+"\n\n"+
+			"Ketik nomor produk lain untuk menambah, *selesai* untuk lanjut ke pengiriman, atau *batal*.")
+
+	case "more_or_checkout":
+		products, err := r.store.ListProducts(ctx, true)
+		idx := ParseNumber(normalized)
+		if err == nil && idx > 0 && idx <= len(products) {
+			p := products[idx-1]
+			if p.Stock >= 0 && p.Stock <= 0 {
+				r.reply(ctx, c, fmt.Sprintf("Maaf, %s sedang *habis*.", p.Name))
+				return
+			}
+			_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+				CustomerID: c.ID, State: "entering_qty", ProductID: p.ID, Qty: 1, Items: session.Items,
+			})
+			r.reply(ctx, c, fmt.Sprintf("Anda memilih *%s* — %s.\n\nBerapa jumlah yang ingin dipesan? (mis. *2*)", p.Name, FormatPrice(p.Price)))
+			return
+		}
+		if normalized == "selesai" || normalized == "checkout" || normalized == "jadi" || normalized == "ya" || normalized == "y" {
+			if len(session.Items) == 0 {
+				r.reply(ctx, c, "Keranjang masih kosong. Ketik *menu* untuk memilih produk.")
+				return
+			}
+			_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+				CustomerID: c.ID, State: "choosing_delivery", Items: session.Items,
+			})
+			r.reply(ctx, c, "Pilih metode pengantaran:\n\n*1.* Kirim (antar) — ongkir dikenakan\n*2.* Ambil di toko (gratis)\n\nBalas *1* atau *2*, atau ketik *kirim*/*ambil*.")
+			return
+		}
+		r.reply(ctx, c, "Ketik nomor produk untuk menambah, *selesai* untuk lanjut, atau *batal*.")
+
+	case "choosing_delivery":
+		delivery := ""
+		switch {
+		case normalized == "kirim" || normalized == "antar" || normalized == "1":
+			delivery = "kirim"
+		case normalized == "ambil" || normalized == "pickup" || normalized == "2":
+			delivery = "ambil"
+		}
+		if delivery == "" {
+			r.reply(ctx, c, "Balas *kirim* (antar) atau *ambil* (di toko).")
+			return
+		}
+		if delivery == "ambil" {
+			st := r.storeSettings(ctx)
+			addr := "Ambil di toko"
+			if st.StoreAddress != "" {
+				addr += ": " + st.StoreAddress
+			}
+			_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+				CustomerID: c.ID, State: "confirming", Address: addr, DeliveryType: delivery, Items: session.Items,
+			})
+			r.sendOrderSummary(ctx, c, session.Items, addr, delivery)
+			return
+		}
+		_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+			CustomerID: c.ID, State: "entering_address", DeliveryType: delivery, Items: session.Items,
 		})
 		r.reply(ctx, c, "Boleh tahu *alamat pengiriman* Anda? (tulis alamat lengkap)")
 
 	case "entering_address":
-		_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
-			CustomerID: c.ID, State: "confirming", ProductID: session.ProductID, Qty: session.Qty, Address: body,
-		})
-		p, err := r.store.GetProduct(ctx, session.ProductID)
-		if err != nil || p == nil {
-			_ = r.store.DeleteOrderSession(ctx, c.ID)
-			r.reply(ctx, c, "Produk tidak ditemukan. Ketik *menu* untuk melihat katalog.")
+		if len(strings.TrimSpace(body)) < 5 {
+			r.reply(ctx, c, "Alamat terlalu singkat. Mohon tulis alamat lengkap, atau *batal*.")
 			return
 		}
-		total := p.Price * int64(session.Qty)
-		r.reply(ctx, c, fmt.Sprintf(`🛒 *Ringkasan Pesanan*
-━━━━━━━━━━━━━━
-📦 %s
-🔢 %d x %s
-━━━━━━━━━━━━━━
-💰 *Total: %s*
-
-📍 Alamat: %s
-
-Ketik *ya* untuk konfirmasi, atau *batal* untuk membatalkan.`,
-			p.Name, session.Qty, FormatPrice(p.Price), FormatPrice(total), body))
+		_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+			CustomerID: c.ID, State: "confirming", Address: strings.TrimSpace(body), DeliveryType: session.DeliveryType, Items: session.Items,
+		})
+		r.sendOrderSummary(ctx, c, session.Items, strings.TrimSpace(body), session.DeliveryType)
 
 	case "confirming":
 		if normalized == "ya" || normalized == "y" || normalized == "yes" || normalized == "oke" || normalized == "ok" {
@@ -243,20 +334,66 @@ Ketik *ya* untuk konfirmasi, atau *batal* untuk membatalkan.`,
 	}
 }
 
+// addToCart menambahkan produk ke keranjang; bila produk sama sudah ada,
+// jumlahnya ditambah.
+func addToCart(items []store.OrderItem, productID int64, name string, price int64, qty int) []store.OrderItem {
+	for i := range items {
+		if items[i].ProductID == productID {
+			items[i].Qty += qty
+			return items
+		}
+	}
+	return append(items, store.OrderItem{ProductID: productID, ProductName: name, Price: price, Qty: qty})
+}
+
+// cartMessage menyusun ringkasan keranjang (daftar item + subtotal).
+func (r *Router) cartMessage(ctx context.Context, c *store.Customer, items []store.OrderItem) string {
+	var b strings.Builder
+	b.WriteString("🛒 *Keranjang Anda*\n━━━━━━━━━━━━━━\n")
+	var total int64
+	for i, it := range items {
+		sub := it.Price * int64(it.Qty)
+		total += sub
+		fmt.Fprintf(&b, "%d. %s\n   %d x %s = %s\n", i+1, it.ProductName, it.Qty, FormatPrice(it.Price), FormatPrice(sub))
+	}
+	b.WriteString("━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(&b, "💰 *Subtotal: %s*", FormatPrice(total))
+	return b.String()
+}
+
+func (r *Router) sendOrderSummary(ctx context.Context, c *store.Customer, items []store.OrderItem, address, deliveryType string) {
+	st := r.storeSettings(ctx)
+	var b strings.Builder
+	b.WriteString("🛒 *Ringkasan Pesanan*\n━━━━━━━━━━━━━━\n")
+	var total int64
+	for _, it := range items {
+		total += it.Price * int64(it.Qty)
+		fmt.Fprintf(&b, "📦 %s\n🔢 %d x %s\n", it.ProductName, it.Qty, FormatPrice(it.Price))
+	}
+	fee := int64(0)
+	if deliveryType != "ambil" {
+		fee = st.DeliveryFee
+	}
+	if fee > 0 {
+		fmt.Fprintf(&b, "🚚 Ongkir: %s\n", FormatPrice(fee))
+	}
+	b.WriteString("━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(&b, "💰 *Total: %s*\n\n", FormatPrice(total+fee))
+	if deliveryType == "ambil" {
+		b.WriteString("🏬 Pengambilan: *di toko*\n")
+	}
+	fmt.Fprintf(&b, "📍 Alamat: %s\n\nKetik *ya* untuk konfirmasi, atau *batal* untuk membatalkan.", address)
+	r.reply(ctx, c, b.String())
+}
+
 func (r *Router) createOrder(ctx context.Context, c *store.Customer, session *store.OrderSession) {
-	p, err := r.store.GetProduct(ctx, session.ProductID)
-	if err != nil || p == nil {
+	if len(session.Items) == 0 {
 		_ = r.store.DeleteOrderSession(ctx, c.ID)
-		r.reply(ctx, c, "Produk tidak ditemukan. Ketik *menu* untuk melihat katalog.")
+		r.reply(ctx, c, "Keranjang kosong. Ketik *menu* untuk memilih produk.")
 		return
 	}
 
-	order, err := r.store.CreateOrder(ctx, c.ID, session.Address, []store.OrderItem{{
-		ProductID:   p.ID,
-		ProductName: p.Name,
-		Price:       p.Price,
-		Qty:         session.Qty,
-	}})
+	order, err := r.store.CreateOrder(ctx, c.ID, session.Address, session.DeliveryType, r.storeSettings(ctx).DeliveryFee, session.Items)
 	if err != nil {
 		r.reply(ctx, c, "Maaf, terjadi kendala saat memproses pesanan. Silakan coba lagi.")
 		return
@@ -264,37 +401,50 @@ func (r *Router) createOrder(ctx context.Context, c *store.Customer, session *st
 	_ = r.store.DeleteOrderSession(ctx, c.ID)
 
 	// Notify admin
-	if r.cfg.AdminPhone != "" {
-		adminCust, err := r.store.GetCustomerByPhone(ctx, r.cfg.AdminPhone)
+	adminPhone := r.storeSettings(ctx).AdminPhone
+	if adminPhone != "" {
+		adminCust, err := r.store.GetCustomerByPhone(ctx, adminPhone)
 		if err != nil || adminCust == nil {
-			adminCust, _ = r.store.GetOrCreateCustomer(ctx, r.cfg.AdminPhone, r.cfg.AdminPhone+"@s.whatsapp.net", "Admin")
+			adminCust, _ = r.store.GetOrCreateCustomer(ctx, adminPhone, adminPhone+"@s.whatsapp.net", "Admin")
+		}
+		var itemsText strings.Builder
+		for _, it := range order.Items {
+			fmt.Fprintf(&itemsText, "🛒 %s x %d = %s\n", it.ProductName, it.Qty, FormatPrice(it.Price*int64(it.Qty)))
+		}
+		deliveryLine := "🏬 Pengambilan: di toko"
+		if order.DeliveryType != "ambil" {
+			deliveryLine = fmt.Sprintf("🚚 Kirim — ongkir: %s", FormatPrice(order.DeliveryFee))
 		}
 		msg := fmt.Sprintf(`📢 *ORDER BARU* %s
 ━━━━━━━━━━━━━━
 👤 Nama: %s
 📱 No: %s
-🛒 %s x %d = %s
-💰 *Total: %s*
+%s💰 *Total: %s*
 📍 Alamat: %s
+%s
 🕐 %s
 ━━━━━━━━━━━━━━
 Kelola di dashboard atau balas /ringkasan.`,
-			order.OrderNumber, c.Name, c.Phone, p.Name, session.Qty, FormatPrice(p.Price),
-			FormatPrice(order.Total), session.Address, time.Now().Format("02 Jan 15:04"))
+			order.OrderNumber, c.Name, c.Phone, itemsText.String(),
+			FormatPrice(order.Total), session.Address, deliveryLine, time.Now().Format("02 Jan 15:04"))
 		if _, err := r.gowa.SendText(ctx, adminCust.Phone, msg); err != nil {
 			// non-fatal
 		}
 	}
 
+	st := r.storeSettings(ctx)
+	var itemsText strings.Builder
+	for _, it := range order.Items {
+		fmt.Fprintf(&itemsText, "📦 %s x %d\n", it.ProductName, it.Qty)
+	}
 	r.reply(ctx, c, fmt.Sprintf(`✅ *Pesanan berhasil!*
 ━━━━━━━━━━━━━━
 📋 No. Order: %s
-📦 %s x %d
-💰 Total: %s
+%s💰 Total: %s
 📍 Alamat: %s
 ━━━━━━━━━━━━━━
 Kami akan segera memproses pesanan Anda. Terima kasih telah berbelanja di *%s*! 💖`,
-		order.OrderNumber, p.Name, session.Qty, FormatPrice(order.Total), session.Address, r.cfg.StoreName))
+		order.OrderNumber, itemsText.String(), FormatPrice(order.Total), session.Address, st.StoreName))
 }
 
 // SendOrderStatusUpdate informs a customer that their order status changed.
@@ -315,8 +465,9 @@ func (r *Router) SendOrderStatusUpdate(ctx context.Context, order *store.Order, 
 	if label == "" {
 		label = status
 	}
+	st := r.storeSettings(ctx)
 	msg := fmt.Sprintf("Halo %s! Pesanan *%s* Anda %s.\n\nTerima kasih telah berbelanja di *%s*! 💖",
-		order.Customer.Name, order.OrderNumber, label, r.cfg.StoreName)
+		order.Customer.Name, order.OrderNumber, label, st.StoreName)
 	_, err := r.gowa.SendText(ctx, WATarget(order.Customer), msg)
 	return err
 }
@@ -325,7 +476,7 @@ func (r *Router) SendOrderStatusUpdate(ctx context.Context, order *store.Order, 
 
 func (r *Router) reply(ctx context.Context, c *store.Customer, text string) {
 	if _, err := r.gowa.SendText(ctx, WATarget(c), text); err != nil {
-		log.Printf("reply ke %s gagal: %v", c.Phone, err)
+		log.Printf("reply ke %s gagal: %v", r.maskPhone(c.Phone), err)
 		return
 	}
 	_ = r.store.SaveChatMessage(ctx, &store.ChatMessage{
@@ -342,8 +493,9 @@ func (r *Router) sendCatalog(ctx context.Context, c *store.Customer) {
 		r.reply(ctx, c, "Maaf, katalog sedang kosong. Silakan coba lagi nanti.")
 		return
 	}
+	st := r.storeSettings(ctx)
 	var b strings.Builder
-	fmt.Fprintf(&b, "📦 *Katalog %s*\n━━━━━━━━━━━━━━\n", r.cfg.StoreName)
+	fmt.Fprintf(&b, "📦 *Katalog %s*\n━━━━━━━━━━━━━━\n", st.StoreName)
 	for i, p := range products {
 		fmt.Fprintf(&b, "%d. *%s*\n   %s", i+1, p.Name, FormatPrice(p.Price))
 		if p.Description != "" {
@@ -352,19 +504,38 @@ func (r *Router) sendCatalog(ctx context.Context, c *store.Customer) {
 		if p.Stock >= 0 {
 			fmt.Fprintf(&b, "\n   Stok: %d", p.Stock)
 		}
+		if p.PurchaseLink != "" {
+			fmt.Fprintf(&b, "\n   🔗 %s", p.PurchaseLink)
+		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "━━━━━━━━━━━━━━\nKetik nomor produk (mis. *1*) untuk memesan.")
+	b.WriteString("━━━━━━━━━━━━━━\nKetik nomor produk (mis. *1*) untuk memesan.")
+	if st.StoreAddress != "" {
+		fmt.Fprintf(&b, "\n📍 Alamat: %s", st.StoreAddress)
+	}
+	if st.AdminPhone != "" {
+		fmt.Fprintf(&b, "\n📞 Kontak: %s", st.AdminPhone)
+	}
 	r.reply(ctx, c, b.String())
 
+	// Pertahankan keranjang bila pelanggan sudah memulai pesanan.
+	items := []store.OrderItem{}
+	if existing, err := r.store.GetOrderSession(ctx, c.ID); err == nil && existing != nil && len(existing.Items) > 0 {
+		items = existing.Items
+	}
 	_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
-		CustomerID: c.ID, State: "selecting_product",
+		CustomerID: c.ID, State: "selecting_product", Items: items,
 	})
 }
 
 func (r *Router) defaultReply() string {
+	st, err := r.settings.Get(context.Background())
+	storeName := r.cfg.StoreName
+	if err == nil && st != nil && st.StoreName != "" {
+		storeName = st.StoreName
+	}
 	return fmt.Sprintf("Halo! 👋 Untuk melihat katalog produk kami, ketik *menu*.\n\n"+
-		"Kami di *%s* siap melayani Anda. Terima kasih! 💖", r.cfg.StoreName)
+		"Kami di *%s* siap melayani Anda. Terima kasih! 💖", storeName)
 }
 
 // truncate limits a string for safe logging.

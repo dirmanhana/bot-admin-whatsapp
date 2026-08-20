@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -140,7 +141,7 @@ func (s *Store) SetCustomerStatus(ctx context.Context, id int64, status string) 
 // ---------- Products ----------
 
 func (s *Store) ListProducts(ctx context.Context, activeOnly bool) ([]Product, error) {
-	q := `SELECT id, name, description, price, image_path, stock, is_active, created_at, updated_at FROM products`
+	q := `SELECT id, name, description, price, image_path, stock, is_active, purchase_link, created_at, updated_at FROM products`
 	if activeOnly {
 		q += ` WHERE is_active = true`
 	}
@@ -153,7 +154,8 @@ func (s *Store) ListProducts(ctx context.Context, activeOnly bool) ([]Product, e
 	var out []Product
 	for rows.Next() {
 		var p Product
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.ImagePath, &p.Stock, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.ImagePath, &p.Stock, &p.IsActive,
+			&p.PurchaseLink, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -164,8 +166,9 @@ func (s *Store) ListProducts(ctx context.Context, activeOnly bool) ([]Product, e
 func (s *Store) GetProduct(ctx context.Context, id int64) (*Product, error) {
 	var p Product
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, name, description, price, image_path, stock, is_active, created_at, updated_at FROM products WHERE id = $1`), id).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.ImagePath, &p.Stock, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+		SELECT id, name, description, price, image_path, stock, is_active, purchase_link, created_at, updated_at FROM products WHERE id = $1`), id).
+		Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.ImagePath, &p.Stock, &p.IsActive,
+			&p.PurchaseLink, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -178,17 +181,19 @@ func (s *Store) GetProduct(ctx context.Context, id int64) (*Product, error) {
 func (s *Store) CreateProduct(ctx context.Context, p *Product) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO products (name, description, price, image_path, stock, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`),
-		p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive).Scan(&id)
+		INSERT INTO products (name, description, price, image_path, stock, is_active, purchase_link)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`),
+		p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive, p.PurchaseLink).Scan(&id)
 	return id, err
 }
 
 func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
-		UPDATE products SET name=$1, description=$2, price=$3, image_path=$4, stock=$5, is_active=$6, updated_at=$7
-		WHERE id=$8`),
-		p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive, time.Now(), p.ID)
+		UPDATE products SET name=$1, description=$2, price=$3, image_path=$4, stock=$5, is_active=$6,
+			purchase_link=$7, updated_at=$8
+		WHERE id=$9`),
+		p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive,
+		p.PurchaseLink, time.Now(), p.ID)
 	return err
 }
 
@@ -199,7 +204,7 @@ func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
 
 // ---------- Orders ----------
 
-func (s *Store) CreateOrder(ctx context.Context, customerID int64, address string, items []OrderItem) (*Order, error) {
+func (s *Store) CreateOrder(ctx context.Context, customerID int64, address, deliveryType string, deliveryFee int64, items []OrderItem) (*Order, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -221,14 +226,17 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address strin
 	for _, it := range items {
 		total += it.Price * int64(it.Qty)
 	}
+	if deliveryType != "ambil" && deliveryFee > 0 {
+		total += deliveryFee
+	}
 
 	var o Order
 	err = tx.QueryRowContext(ctx, s.q(`
-		INSERT INTO orders (order_number, customer_id, address, total)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, order_number, customer_id, status, total, address, note, created_at, updated_at`),
-		orderNumber, customerID, address, total).
-		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address, &o.Note, &o.CreatedAt, &o.UpdatedAt)
+		INSERT INTO orders (order_number, customer_id, address, total, delivery_type, delivery_fee)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, order_number, customer_id, status, total, address, delivery_type, delivery_fee, note, created_at, updated_at`),
+		orderNumber, customerID, address, total, deliveryType, deliveryFee).
+		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address, &o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +257,7 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address strin
 
 func (s *Store) ListOrders(ctx context.Context, status string, limit int) ([]Order, error) {
 	q := `
-		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.note, o.created_at, o.updated_at,
+		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.note, o.created_at, o.updated_at,
 		       c.phone, c.name, c.status AS customer_status
 		FROM orders o JOIN customers c ON c.id = o.customer_id`
 	args := []any{}
@@ -271,8 +279,8 @@ func (s *Store) ListOrders(ctx context.Context, status string, limit int) ([]Ord
 	for rows.Next() {
 		var o Order
 		var c Customer
-		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address, &o.Note,
-			&o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status); err != nil {
+		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address,
+			&o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status); err != nil {
 			return nil, err
 		}
 		o.Customer = &c
@@ -295,11 +303,11 @@ func (s *Store) GetOrder(ctx context.Context, id int64) (*Order, error) {
 	var o Order
 	var c Customer
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.note, o.created_at, o.updated_at,
+		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.note, o.created_at, o.updated_at,
 		       c.phone, c.name, c.status
 		FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1`), id).
-		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address, &o.Note,
-			&o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status)
+		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address,
+			&o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -529,31 +537,65 @@ func (s *Store) FinishBroadcast(ctx context.Context, id int64, status string) er
 
 func (s *Store) GetOrderSession(ctx context.Context, customerID int64) (*OrderSession, error) {
 	var os OrderSession
+	var itemsJSON string
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT customer_id, state, product_id, qty, address, updated_at FROM order_sessions WHERE customer_id = $1`), customerID).
-		Scan(&os.CustomerID, &os.State, &os.ProductID, &os.Qty, &os.Address, &os.UpdatedAt)
+		SELECT customer_id, state, product_id, qty, address, delivery_type, items, updated_at FROM order_sessions WHERE customer_id = $1`), customerID).
+		Scan(&os.CustomerID, &os.State, &os.ProductID, &os.Qty, &os.Address, &os.DeliveryType, &itemsJSON, &os.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	os.Items = []OrderItem{}
+	if itemsJSON != "" {
+		_ = json.Unmarshal([]byte(itemsJSON), &os.Items)
+	}
 	return &os, nil
 }
 
 func (s *Store) UpsertOrderSession(ctx context.Context, os *OrderSession) error {
-	_, err := s.db.ExecContext(ctx, s.q(`
-		INSERT INTO order_sessions (customer_id, state, product_id, qty, address, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+	itemsJSON, err := json.Marshal(os.Items)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, s.q(`
+		INSERT INTO order_sessions (customer_id, state, product_id, qty, address, delivery_type, items, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (customer_id) DO UPDATE SET
 			state = EXCLUDED.state, product_id = EXCLUDED.product_id, qty = EXCLUDED.qty,
-			address = EXCLUDED.address, updated_at = EXCLUDED.updated_at`),
-		os.CustomerID, os.State, os.ProductID, os.Qty, os.Address, time.Now())
+			address = EXCLUDED.address, delivery_type = EXCLUDED.delivery_type,
+			items = EXCLUDED.items, updated_at = EXCLUDED.updated_at`),
+		os.CustomerID, os.State, os.ProductID, os.Qty, os.Address, os.DeliveryType, string(itemsJSON), time.Now())
 	return err
 }
 
 func (s *Store) DeleteOrderSession(ctx context.Context, customerID int64) error {
 	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM order_sessions WHERE customer_id = $1`), customerID)
+	return err
+}
+
+// ---------- AI usage ----------
+
+// GetAIUsageCount mengembalikan jumlah jawaban AI hari ini untuk pelanggan.
+func (s *Store) GetAIUsageCount(ctx context.Context, customerID int64, day string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, s.q(`
+		SELECT count FROM ai_usage WHERE customer_id = $1 AND day = $2`), customerID, day).Scan(&n)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// IncrementAIUsage menaikkan penghitung penggunaan AI untuk pelanggan hari ini.
+func (s *Store) IncrementAIUsage(ctx context.Context, customerID int64, day string) error {
+	_, err := s.db.ExecContext(ctx, s.q(`
+		INSERT INTO ai_usage (customer_id, day, count) VALUES ($1, $2, 1)
+		ON CONFLICT (customer_id, day) DO UPDATE SET count = ai_usage.count + 1`), customerID, day)
 	return err
 }
 

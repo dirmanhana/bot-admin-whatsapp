@@ -2,12 +2,16 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
+	"github.com/dirman/bot-admin-whatsapp/internal/settings"
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
 )
 
@@ -32,14 +36,27 @@ const (
 type Service struct {
 	store *store.Store
 	cfg   *config.Config
+	stg   *settings.Service
 
 	mu       sync.Mutex
 	cached   *Settings
 	cachedAt time.Time
+
+	cacheMu sync.Mutex
+	cache   map[string]cacheEntry
 }
 
-func New(st *store.Store, cfg *config.Config) *Service {
-	return &Service{store: st, cfg: cfg}
+// cacheEntry menyimpan jawaban untuk pertanyaan yang sama agar tidak
+// memanggil API berulang (hemat biaya). TTL 2 jam.
+type cacheEntry struct {
+	answer    string
+	cachedAt  time.Time
+}
+
+const cacheTTL = 2 * time.Hour
+
+func New(st *store.Store, cfg *config.Config, stg *settings.Service) *Service {
+	return &Service{store: st, cfg: cfg, stg: stg, cache: map[string]cacheEntry{}}
 }
 
 // Settings memuat konfigurasi AI; nilai dari database menang atas .env.
@@ -122,7 +139,20 @@ func (s *Service) Answer(ctx context.Context, question string, history []store.C
 		return "", nil
 	}
 
-	client := NewClient(st.BaseURL, st.APIKey, st.Model)
+	// Cache pertanyaan identik (normalisasi huruf kecil) agar tidak
+	// memanggil API berulang untuk pertanyaan yang sama.
+	cacheKey := strings.ToLower(question)
+	if cached, ok := s.cacheGet(cacheKey); ok {
+		return cached, nil
+	}
+
+	maxTokens := s.cfg.AIMaxTokens
+	if s.stg != nil {
+		if st, err := s.stg.Get(ctx); err == nil && st.AIMaxTokens > 0 {
+			maxTokens = st.AIMaxTokens
+		}
+	}
+	client := NewClient(st.BaseURL, st.APIKey, st.Model, maxTokens)
 
 	// Retrieval memakai pertanyaan + pesan terakhir sebelum pertanyaan ini,
 	// agar pertanyaan kontekstual ("yang tadi berapa?") tetap menemukan
@@ -140,9 +170,40 @@ func (s *Service) Answer(ctx context.Context, question string, history []store.C
 	if err != nil {
 		log.Printf("ai: search knowledge: %v", err)
 	}
-	context := strings.Join(chunks, "\n\n---\n\n")
+	kbContext := strings.Join(chunks, "\n\n---\n\n")
 
-	system := systemPrompt(s.cfg.StoreName, len(chunks) > 0)
+	// Data produk dari dashboard (admin/products) ikut dijadikan konteks,
+	// sehingga AI bisa menjawab harga/stok/produk dari data terbaru DB.
+	products, err := s.store.ListProducts(ctx, true)
+	if err != nil {
+		log.Printf("ai: list products: %v", err)
+	}
+	prodContext := productContext(products, retrievalQuery)
+
+	var contextParts []string
+	if prodContext != "" {
+		contextParts = append(contextParts, prodContext)
+	}
+	if kbContext != "" {
+		contextParts = append(contextParts, "KNOWLEDGE BASE (dokumen yang diunggah):\n"+kbContext)
+	}
+	context := strings.Join(contextParts, "\n\n---\n\n")
+
+	storeName, storeAddress, adminPhone, aiPersonality, aiName, storeHours, paymentMethods := s.cfg.StoreName, "", "", "", "", "", ""
+	if s.stg != nil {
+		if st, err := s.stg.Get(ctx); err == nil {
+			if st.StoreName != "" {
+				storeName = st.StoreName
+			}
+			storeAddress = st.StoreAddress
+			adminPhone = st.AdminPhone
+			aiPersonality = st.AIPersonality
+			aiName = st.AIName
+			storeHours = st.StoreHours
+			paymentMethods = st.PaymentMethods
+		}
+	}
+	system := systemPrompt(storeName, storeAddress, adminPhone, aiPersonality, aiName, storeHours, paymentMethods, len(products) > 0 || len(chunks) > 0)
 	prompt := promptFor(question, context, history)
 
 	answer, err := client.Chat(ctx, system, prompt)
@@ -150,21 +211,65 @@ func (s *Service) Answer(ctx context.Context, question string, history []store.C
 		log.Printf("ai: chat gagal: %v", err)
 		return "", err
 	}
+	if answer != "" {
+		s.cachePut(cacheKey, answer)
+	}
 	return answer, nil
 }
 
-func systemPrompt(storeName string, hasData bool) string {
+func (s *Service) cacheGet(key string) (string, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	e, ok := s.cache[key]
+	if !ok || time.Since(e.cachedAt) > cacheTTL {
+		return "", false
+	}
+	return e.answer, true
+}
+
+func (s *Service) cachePut(key, answer string) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if len(s.cache) > 500 {
+		s.cache = map[string]cacheEntry{}
+	}
+	s.cache[key] = cacheEntry{answer: answer, cachedAt: time.Now()}
+}
+
+func systemPrompt(storeName, storeAddress, adminPhone, aiPersonality, aiName, storeHours, paymentMethods string, hasData bool) string {
+	var info strings.Builder
+	if aiName != "" {
+		fmt.Fprintf(&info, "Namamu adalah %s, asisten layanan pelanggan WhatsApp untuk toko \"%s\". ", aiName, storeName)
+	} else {
+		fmt.Fprintf(&info, "Kamu adalah asisten layanan pelanggan WhatsApp untuk toko \"%s\". ", storeName)
+	}
+	if aiPersonality != "" {
+		fmt.Fprintf(&info, "Kepribadianmu: %s. Ikuti kepribadian ini saat menjawab pelanggan. ", aiPersonality)
+	}
+	if storeAddress != "" {
+		fmt.Fprintf(&info, "Alamat toko: %s. ", storeAddress)
+	}
+	if storeHours != "" {
+		fmt.Fprintf(&info, "Jam operasional: %s. ", storeHours)
+	}
+	if paymentMethods != "" {
+		fmt.Fprintf(&info, "Metode pembayaran: %s. ", paymentMethods)
+	}
+	if adminPhone != "" {
+		fmt.Fprintf(&info, "Kontak admin (nomor WhatsApp): %s. ", adminPhone)
+	}
+	info.WriteString("Jawab dalam Bahasa Indonesia, singkat, ramah, dan sopan. ")
 	if hasData {
-		return "Kamu adalah asisten layanan pelanggan WhatsApp untuk toko \"" + storeName + "\". " +
-			"Jawab pertanyaan pelanggan berdasarkan DATA TOKO yang diberikan. " +
+		info.WriteString("Jawab pertanyaan pelanggan berdasarkan DATA TOKO yang diberikan. " +
 			"Gunakan harga, produk, dan keterangan yang ada di data. " +
 			"Jika jawaban tidak ada di data, katakan tidak tahu dan sarankan menghubungi admin. " +
-			"Jangan mengarang harga, stok, atau produk. Jawab dalam Bahasa Indonesia, singkat, ramah, dan sopan."
+			"Jangan mengarang harga, stok, atau produk.")
+	} else {
+		info.WriteString("Jawab pertanyaan umum pelanggan dengan singkat dan ramah. " +
+			"Jika tidak yakin, arahkan pelanggan untuk menghubungi admin. " +
+			"Jangan mengarang informasi spesifik (harga, stok) karena belum ada data toko.")
 	}
-	return "Kamu adalah asisten layanan pelanggan WhatsApp untuk toko \"" + storeName + "\". " +
-		"Jawab pertanyaan umum pelanggan dengan singkat, ramah, dalam Bahasa Indonesia. " +
-		"Jika tidak yakin, arahkan pelanggan untuk menghubungi admin. " +
-		"Jangan mengarang informasi spesifik (harga, stok) karena belum ada data toko."
+	return info.String()
 }
 
 func promptFor(question, context string, history []store.ChatMessage) string {
@@ -222,4 +327,110 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// productContext menyusun produk aktif dari dashboard (admin/products) menjadi
+// teks konteks untuk AI. Hanya produk yang cocok dengan kata kunci pertanyaan
+// yang disertakan (hemat token); bila tak ada yang cocok, sejumlah kecil
+// produk ditampilkan agar AI tetap punya gambaran toko.
+func productContext(products []store.Product, query string) string {
+	if len(products) == 0 {
+		return ""
+	}
+	words := queryWords(query)
+	type scored struct {
+		p     store.Product
+		score int
+	}
+	scoredList := make([]scored, 0, len(products))
+	for _, p := range products {
+		hay := strings.ToLower(p.Name + " " + p.Description)
+		n := 0
+		for _, w := range words {
+			if w != "" && strings.Contains(hay, w) {
+				n++
+			}
+		}
+		scoredList = append(scoredList, scored{p, n})
+	}
+	sort.SliceStable(scoredList, func(i, j int) bool {
+		return scoredList[i].score > scoredList[j].score
+	})
+
+	// Hanya produk relevan (score > 0), maksimal 15.
+	relevant := 0
+	for _, s := range scoredList {
+		if s.score > 0 {
+			relevant++
+		}
+	}
+	show := relevant
+	if show == 0 {
+		show = 5
+	}
+	const maxShown = 15
+	if show > maxShown {
+		show = maxShown
+	}
+
+	var b strings.Builder
+	b.WriteString("PRODUK TOKO (data terbaru dari dashboard admin/products):\n")
+	for i, s := range scoredList {
+		if i >= show {
+			break
+		}
+		p := s.p
+		fmt.Fprintf(&b, "- %s | harga: %s", p.Name, formatPrice(p.Price))
+		if p.Stock >= 0 {
+			fmt.Fprintf(&b, " | stok: %d", p.Stock)
+		} else {
+			b.WriteString(" | stok: tersedia")
+		}
+		if p.Description != "" {
+			fmt.Fprintf(&b, " | keterangan: %s", p.Description)
+		}
+		if p.PurchaseLink != "" {
+			fmt.Fprintf(&b, " | link pembelian: %s", p.PurchaseLink)
+		}
+		b.WriteString("\n")
+	}
+	if relevant == 0 && len(products) > show {
+		fmt.Fprintf(&b, "(katalog toko punya %d produk lain — pelanggan bisa ketik *menu* untuk melihatnya)\n", len(products)-show)
+	}
+	return b.String()
+}
+
+// queryWords memecah pertanyaan menjadi kata kunci (>= 3 huruf).
+func queryWords(q string) []string {
+	var words []string
+	for _, w := range strings.FieldsFunc(q, func(r rune) bool {
+		return r <= ' ' || r == ',' || r == '.' || r == ';' || r == ':' || r == '?' || r == '!' || r == '"' || r == '\''
+	}) {
+		w = strings.ToLower(strings.Trim(w, ".,;:!?\"'()[]{}-"))
+		if len([]rune(w)) >= 3 {
+			words = append(words, w)
+		}
+	}
+	return words
+}
+
+// formatPrice merender nominal dalam Rupiah dengan pemisah ribuan.
+func formatPrice(v int64) string {
+	neg := v < 0
+	if neg {
+		v = -v
+	}
+	s := strconv.FormatInt(v, 10)
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte('.')
+		}
+		b.WriteRune(c)
+	}
+	out := "Rp" + b.String()
+	if neg {
+		out = "-" + out
+	}
+	return out
 }
