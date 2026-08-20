@@ -26,7 +26,7 @@
         </tr>
       </thead>
       <tbody>
-        {{range $orders}}
+        {{range $o := $orders}}
         <tr class="border-b last:border-0 hover-row">
           <td class="px-2 py-2">{{.OrderNumber}}</td>
           <td class="px-2 py-2">
@@ -45,7 +45,7 @@
               <select name="status"
                 class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-7 min-w-0 rounded-md border bg-transparent px-2 py-0 text-sm transition-colors outline-none focus-visible:ring-3">
                 {{range $statuses}}
-                <option value="{{.}}" {{if eq . $.Status}}selected{{end}}>{{statusLabel .}}</option>
+                <option value="{{.}}" {{if eq . $o.Status}}selected{{end}}>{{statusLabel .}}</option>
                 {{end}}
               </select>
               <button type="submit"
