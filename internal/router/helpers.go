@@ -49,6 +49,21 @@ func ParseNumber(s string) int {
 	return 0
 }
 
+// ExtractQty mengambil jumlah dari pesan bebas, mis. "saya mau pesan bakso
+// kering 10 qty" -> 10; "2 pcs", "5x", "3 buah" juga dikenali. 0 bila
+// tidak ada angka yang jelas.
+func ExtractQty(s string) int {
+	fields := strings.Fields(strings.ToLower(s))
+	for _, f := range fields {
+		num := strings.SplitN(f, "x", 2)[0]
+		num = strings.Trim(num, "pcs qty pax buah biji bungkus .")
+		if n, err := strconv.Atoi(num); err == nil && n > 0 && n < 100000 {
+			return n
+		}
+	}
+	return 0
+}
+
 // FormatPrice renders an amount in Rupiah with thousands separators.
 func FormatPrice(v int64) string {
 	neg := v < 0

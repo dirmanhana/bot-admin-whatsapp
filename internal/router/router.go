@@ -176,6 +176,12 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 		return
 	}
 
+	// Niat memesan dalam kalimat bebas ("saya mau pesan bakso kering 10 pcs")
+	// ditangani sebagai alur order, BUKAN diteruskan ke AI.
+	if r.tryOrderIntent(ctx, c, body) {
+		return
+	}
+
 	if qr, err := r.store.GetQuickReplyByKeyword(ctx, normalized); err == nil && qr != nil {
 		r.reply(ctx, c, qr.Reply)
 		return
@@ -208,6 +214,68 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 	}
 
 	r.reply(ctx, c, r.defaultReply(ctx))
+}
+
+// tryOrderIntent mengenali pesan yang berniat memesan (mis. "saya mau pesan
+// bakso kering 10 pcs") dan memulai alur order. Bila nama produk disebut,
+// produk itu langsung dipilih (dan jumlahnya bila ada); bila tidak jelas,
+// pelanggan diarahkan ke katalog. Mengembalikan true bila pesan ditangani
+// di sini (tidak diteruskan ke AI).
+func (r *Router) tryOrderIntent(ctx context.Context, c *store.Customer, body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if !containsOrderIntent(lower) {
+		return false
+	}
+
+	products, err := r.store.ListProducts(ctx, true)
+	if err != nil {
+		return false
+	}
+	var selected *store.Product
+	for i := range products {
+		if strings.Contains(lower, strings.ToLower(products[i].Name)) {
+			selected = &products[i]
+			break
+		}
+	}
+
+	if selected == nil {
+		// Tidak jelas produknya — arahkan ke katalog agar memilih lewat alur.
+		r.sendCatalog(ctx, c)
+		return true
+	}
+	if selected.Stock == 0 {
+		r.reply(ctx, c, fmt.Sprintf("Maaf, %s sedang *habis*.", selected.Name))
+		return true
+	}
+
+	qty := ExtractQty(lower)
+	if qty > 0 {
+		items := addToCart(nil, selected.ID, selected.Name, selected.Price, qty)
+		_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+			CustomerID: c.ID, State: "more_or_checkout", Items: items,
+		})
+		r.reply(ctx, c, r.cartMessage(ctx, c, items)+"\n\n"+
+			"Ketik nomor produk lain untuk menambah, *selesai* untuk lanjut ke pengiriman, atau *batal*.")
+		return true
+	}
+
+	_ = r.store.UpsertOrderSession(ctx, &store.OrderSession{
+		CustomerID: c.ID, State: "entering_qty", ProductID: selected.ID, Qty: 1,
+	})
+	r.reply(ctx, c, fmt.Sprintf("Anda memilih *%s* — %s.\n\nBerapa jumlah yang ingin dipesan? (mis. *2*)",
+		selected.Name, FormatPrice(selected.Price)))
+	return true
+}
+
+// containsOrderIntent mengecek apakah pesan mengandung niat memesan.
+func containsOrderIntent(lower string) bool {
+	for _, kw := range []string{"pesan", "beli", "order"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Router) handleOrderSession(ctx context.Context, c *store.Customer, session *store.OrderSession, body, normalized string) {

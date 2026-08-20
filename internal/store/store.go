@@ -267,6 +267,23 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address, deli
 		return nil, err
 	}
 	for _, it := range items {
+		// Kurangi stok (transaksional). Stok < 0 berarti tak terbatas: tidak
+		// dikurangi dan tidak pernah gagal. Bila stok terbatas dan tidak
+		// mencukupi, seluruh order dibatalkan (rollback).
+		if it.ProductID > 0 {
+			res, err := tx.ExecContext(ctx, s.q(`
+				UPDATE products
+				SET stock = CASE WHEN stock < 0 THEN stock ELSE stock - $1 END,
+				    updated_at = $2
+				WHERE id = $3 AND tenant_id = $4 AND (stock < 0 OR stock >= $1)`),
+				it.Qty, time.Now(), it.ProductID, s.tid(ctx))
+			if err != nil {
+				return nil, err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return nil, fmt.Errorf("stok produk %d tidak mencukupi (%s)", it.ProductID, it.ProductName)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, s.q(`
 			INSERT INTO order_items (tenant_id, order_id, product_id, product_name, price, qty)
 			VALUES ($1, $2, $3, $4, $5, $6)`),

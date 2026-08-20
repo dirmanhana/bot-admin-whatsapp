@@ -266,3 +266,49 @@ func TestCreateOrderSequencePerTenant(t *testing.T) {
 		t.Fatalf("nomor order salah: %s, %s, %s", o1a.OrderNumber, o1b.OrderNumber, o2a.OrderNumber)
 	}
 }
+
+func TestCreateOrderDecrementsStock(t *testing.T) {
+	_, st := openTestDB(t)
+	ctx := WithTenant(context.Background(), 1)
+	c, _ := st.GetOrCreateCustomer(ctx, "62811", "62811@s.whatsapp.net", "A")
+
+	// Produk stok terbatas.
+	pid, err := st.CreateProduct(ctx, &Product{Name: "Terbatas", Price: 100, Stock: 5, IsActive: true})
+	if err != nil {
+		t.Fatalf("product: %v", err)
+	}
+	// Produk stok tak terbatas (-1).
+	unlim, err := st.CreateProduct(ctx, &Product{Name: "Tanpa Batas", Price: 200, Stock: -1, IsActive: true})
+	if err != nil {
+		t.Fatalf("product: %v", err)
+	}
+
+	// Pesan 3 dari stok 5.
+	if _, err := st.CreateOrder(ctx, c.ID, "addr", "kirim", 0, []OrderItem{{ProductID: pid, ProductName: "Terbatas", Price: 100, Qty: 3}}); err != nil {
+		t.Fatalf("order: %v", err)
+	}
+	p, _ := st.GetProduct(ctx, pid)
+	if p.Stock != 2 {
+		t.Fatalf("stok setelah order harus 2, dapat %d", p.Stock)
+	}
+	// Produk tak terbatas tidak berubah.
+	p2, _ := st.GetProduct(ctx, unlim)
+	if p2.Stock != -1 {
+		t.Fatalf("stok tak terbatas harus tetap -1, dapat %d", p2.Stock)
+	}
+
+	// Pesan melebihi stok harus gagal (rollback total).
+	_, err = st.CreateOrder(ctx, c.ID, "addr", "kirim", 0, []OrderItem{{ProductID: pid, ProductName: "Terbatas", Price: 100, Qty: 99}})
+	if err == nil {
+		t.Fatal("order dengan stok kurang harus gagal")
+	}
+	// Stok & jumlah order tidak berubah setelah kegagalan.
+	p, _ = st.GetProduct(ctx, pid)
+	if p.Stock != 2 {
+		t.Fatalf("stok berubah setelah order gagal: %d", p.Stock)
+	}
+	orders, _ := st.ListOrders(ctx, "", 10)
+	if len(orders) != 1 {
+		t.Fatalf("jumlah order harus tetap 1, dapat %d", len(orders))
+	}
+}

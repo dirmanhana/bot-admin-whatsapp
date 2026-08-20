@@ -90,3 +90,35 @@ func TestAddToCart(t *testing.T) {
 		t.Errorf("addToCart second product: %+v, want 2 items", items)
 	}
 }
+func TestExtractQty(t *testing.T) {
+	cases := map[string]int{
+		"saya mau pesan bakso kering 10 qty": 10,
+		"saya mau pesan 10 pcs":              10,
+		"2 pcs":                              2,
+		"5x":                                 5,
+		"3 buah":                             3,
+		"pesan 1":                            1,
+		"tidak ada angka":                    0,
+		"":                                   0,
+	}
+	for in, want := range cases {
+		if got := ExtractQty(in); got != want {
+			t.Errorf("ExtractQty(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestContainsOrderIntent(t *testing.T) {
+	cases := map[string]bool{
+		"saya mau pesan bakso": true,
+		"mau beli 2":           true,
+		"order 1 pcs":          true,
+		"berapa harga bakso?":  false,
+		"halo apa kabar":       false,
+	}
+	for in, want := range cases {
+		if got := containsOrderIntent(in); got != want {
+			t.Errorf("containsOrderIntent(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
