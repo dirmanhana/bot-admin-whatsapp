@@ -5,44 +5,18 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 )
 
-//go:embed migrations/postgres/*.sql migrations/sqlite/*.sql
+//go:embed migrations/postgres/*.sql
 var migrationsFS embed.FS
 
-// Open connects to the database. dialect is "postgres" (default, DSN gaya
-// postgres://) atau "sqlite" (path file .db lokal, murni Go, tanpa CGO —
-// cocok untuk build Windows .exe).
-func Open(ctx context.Context, dialect, dsn string) (*sql.DB, error) {
-	if dialect == "sqlite" {
-		if dsn == "" || strings.HasPrefix(dsn, "postgres://") {
-			dsn = "bot_admin_whatsapp.db"
-		}
-		if !strings.HasPrefix(dsn, "file:") {
-			dsn = "file:" + dsn
-		}
-		// Pragmas penting: WAL untuk konkurensi, foreign_keys untuk ON DELETE
-		// CASCADE, busy_timeout agar tidak langsung SQLITE_BUSY.
-		sep := "?"
-		if strings.Contains(dsn, "?") {
-			sep = "&"
-		}
-		dsn += sep + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_time_format=sqlite"
-		db, err := sql.Open("sqlite", dsn)
-		if err != nil {
-			return nil, fmt.Errorf("open sqlite: %w", err)
-		}
-		db.SetMaxOpenConns(1) // SQLite aman dengan satu koneksi tulis pada satu waktu
-		if err := db.PingContext(ctx); err != nil {
-			return nil, fmt.Errorf("ping sqlite: %w", err)
-		}
-		return db, nil
+// Open connects to the PostgreSQL database (DSN gaya postgres://).
+func Open(ctx context.Context, dsn string) (*sql.DB, error) {
+	if dsn == "" {
+		dsn = "postgres://localhost/bot_admin_whatsapp?sslmode=disable"
 	}
-
-	// default: postgres
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
@@ -53,22 +27,15 @@ func Open(ctx context.Context, dialect, dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate menjalankan migrasi SQL yang belum diterapkan (per dialect).
+// Migrate menjalankan migrasi SQL Postgres yang belum diterapkan.
 func (s *Store) Migrate(ctx context.Context) error {
-	ddl := `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version TEXT PRIMARY KEY,
-		applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`
-	if s.dialect == "sqlite" {
-		ddl = `CREATE TABLE IF NOT EXISTS schema_migrations (
-			version TEXT PRIMARY KEY,
-			applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`
-	}
-	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+		applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	dir := "migrations/" + s.dialect
-	entries, err := migrationsFS.ReadDir(dir)
+	entries, err := migrationsFS.ReadDir("migrations/postgres")
 	if err != nil {
 		return err
 	}
@@ -89,7 +56,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if exists {
 			continue
 		}
-		sqlBytes, err := migrationsFS.ReadFile(dir + "/" + name)
+		sqlBytes, err := migrationsFS.ReadFile("migrations/postgres/" + name)
 		if err != nil {
 			return err
 		}
@@ -101,41 +68,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 func (s *Store) applyMigration(ctx context.Context, name, sqlText string) error {
-	// SQLite: beberapa migrasi men-DROP & membuat ulang tabel induk (mis.
-	// customers pada migrasi multi-tenant). PRAGMA foreign_keys tidak bisa
-	// diubah di dalam transaksi, jadi matikan di luar, lalu aktifkan kembali
-	// dan periksa integritas setelah commit.
-	if s.dialect == "sqlite" {
-		if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
-			return fmt.Errorf("disable foreign_keys: %w", err)
-		}
-		defer func() {
-			_, _ = s.db.ExecContext(ctx, "PRAGMA foreign_keys=ON")
-			rows, err := s.db.QueryContext(ctx, "PRAGMA foreign_key_check")
-			if err != nil {
-				return
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var tbl, parent, child string
-				var rowid int64
-				if rows.Scan(&tbl, &rowid, &parent, &child) == nil {
-					log.Printf("migrate %s: foreign_key_check: table=%s rowid=%d parent=%s child=%s", name, tbl, rowid, parent, child)
-				}
-			}
-		}()
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, s.q(sqlText)); err != nil {
+	if _, err := tx.ExecContext(ctx, sqlText); err != nil {
 		return fmt.Errorf("apply %s: %w", name, err)
 	}
-	if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO schema_migrations (version) VALUES ($1)`), name); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
 		return err
 	}
 	return tx.Commit()

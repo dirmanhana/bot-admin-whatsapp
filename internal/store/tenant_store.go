@@ -137,14 +137,15 @@ func (s *Store) TenantWebhookSecret(ctx context.Context, id int64) (string, erro
 
 // TenantIDByDeviceID mencari tenant pemilik device gowa (dipakai untuk
 // mengarahkan webhook ke tenant yang benar). Mengembalikan 0 bila tidak
-// ditemukan.
+// ditemukan. Satu device hanya boleh milik satu tenant (lihat UpsertWAAccount),
+// jadi hasilnya deterministik.
 func (s *Store) TenantIDByDeviceID(ctx context.Context, deviceID string) (int64, error) {
 	if deviceID == "" {
 		return 0, nil
 	}
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT tenant_id FROM wa_accounts WHERE device_id = $1 LIMIT 1`), deviceID).Scan(&id)
+		SELECT tenant_id FROM wa_accounts WHERE device_id = $1 ORDER BY id LIMIT 1`), deviceID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -180,7 +181,8 @@ func (s *Store) RegenerateTenantWebhookSecret(ctx context.Context, id int64) err
 }
 
 // SeedTenant1 membuat tenant pertama (data lama) bila belum ada. Dipanggil
-// sekali saat startup.
+// sekali saat startup. Sequence id ikut disetel agar tenant berikutnya
+// (registrasi) tidak bentrok dengan id 1.
 func (s *Store) SeedTenant1(ctx context.Context, email, passwordHash string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -191,6 +193,9 @@ func (s *Store) SeedTenant1(ctx context.Context, email, passwordHash string) err
 		INSERT INTO tenants (id, email, password_hash, status, session_epoch, webhook_secret)
 		VALUES (1, $1, $2, 'active', 0, $3)
 		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, updated_at = $4`), email, passwordHash, randomSecret(), time.Now()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.q(`SELECT setval('tenants_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM tenants), 1))`)); err != nil {
 		return err
 	}
 	return tx.Commit()

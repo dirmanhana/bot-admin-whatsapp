@@ -10,19 +10,17 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register driver "pgx" untuk database/sql
-	_ "modernc.org/sqlite"             // register driver "sqlite" (murni Go)
 
 	"github.com/dirman/bot-admin-whatsapp/internal/cryptx"
 )
 
 type Store struct {
-	db      *sql.DB
-	dialect string // "postgres" | "sqlite"
-	cipher  *cryptx.Cipher
+	db     *sql.DB
+	cipher *cryptx.Cipher
 }
 
-func New(db *sql.DB, dialect string) *Store {
-	return &Store{db: db, dialect: dialect}
+func New(db *sql.DB) *Store {
+	return &Store{db: db}
 }
 
 // SetCipher memasang enkripsi untuk kredensial (password/token gowa).
@@ -64,31 +62,11 @@ func (s *Store) tid(ctx context.Context) int64 {
 	return 1
 }
 
-// q mengembalikan SQL sesuai dialect. SQLite tidak mengenal placeholder $N,
-// jadi diubah menjadi ?. Postgres (pgx) memakai $N secara native.
+// q mengembalikan SQL apa adanya — aplikasi ini PostgreSQL-only, jadi tidak
+// ada konversi placeholder. Dibiarkan sebagai method agar perubahan kecil
+// dan semua pemanggil tidak perlu diubah.
 func (s *Store) q(sql string) string {
-	if s.dialect != "sqlite" {
-		return sql
-	}
-	return toSQLitePlaceholders(sql)
-}
-
-func toSQLitePlaceholders(sql string) string {
-	var b strings.Builder
-	b.Grow(len(sql) + 8)
-	for i := 0; i < len(sql); i++ {
-		c := sql[i]
-		if c == '$' && i+1 < len(sql) && sql[i+1] >= '1' && sql[i+1] <= '9' {
-			b.WriteByte('?')
-			i++
-			for i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9' {
-				i++
-			}
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
+	return sql
 }
 
 func nullableTimePtr(nt sql.NullTime) *time.Time {
@@ -150,7 +128,7 @@ func (s *Store) ListCustomers(ctx context.Context, search string) ([]Customer, e
 	q := `SELECT id, phone, jid, name, notes, status, created_at, updated_at FROM customers`
 	args := []any{s.tid(ctx)}
 	if search != "" {
-		// LIKE (bukan ILIKE) agar jalan di Postgres maupun SQLite.
+		// LIKE — kecocokan parsial di Postgres.
 		q += ` WHERE tenant_id = $1 AND (LOWER(phone) LIKE LOWER($2) OR LOWER(name) LIKE LOWER($3) OR LOWER(notes) LIKE LOWER($4))`
 		args = append(args, "%"+search+"%", "%"+search+"%", "%"+search+"%")
 	} else {
@@ -259,8 +237,8 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address, deli
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Nomor urut order: counter tabel order_seq per tenant (kompatibel PG &
-	// SQLite, menggantikan nextval sequence Postgres).
+	// Nomor urut order: counter tabel order_seq per tenant
+	// (menggantikan sequence Postgres; unik per tenant).
 	var seq int64
 	if err := tx.QueryRowContext(ctx, s.q(`
 		INSERT INTO order_seq (id, tenant_id, val) VALUES (1, $1, 1)
@@ -445,8 +423,7 @@ func (s *Store) ListChatMessages(ctx context.Context, customerID int64, limit in
 }
 
 func (s *Store) RecentConversations(ctx context.Context) ([]Conversation, error) {
-	// DISTINCT ON (khusus Postgres) diganti subquery MAX(id) agar kompatibel
-	// dengan SQLite juga.
+	// Subquery MAX(id) untuk mengambil pesan terakhir tiap customer.
 	rows, err := s.db.QueryContext(ctx, s.q(`
 		SELECT cm.customer_id, c.phone, c.name, cm.body, cm.direction, cm.created_at
 		FROM chat_messages cm JOIN customers c ON c.id = cm.customer_id
@@ -714,6 +691,22 @@ func (s *Store) GetActiveWAAccount(ctx context.Context) (*WAAccount, error) {
 }
 
 func (s *Store) UpsertWAAccount(ctx context.Context, username, password, deviceID string, isActive bool) (int64, error) {
+	tid := s.tid(ctx)
+
+	// Satu device gowa hanya boleh milik satu tenant; kalau tidak, webhook
+	// tidak bisa tahu pesan milik siapa (risiko data bocor antar toko).
+	if deviceID != "" {
+		var owner int64
+		err := s.db.QueryRowContext(ctx, s.q(`
+			SELECT tenant_id FROM wa_accounts WHERE device_id = $1 AND tenant_id <> $2 ORDER BY id LIMIT 1`), deviceID, tid).Scan(&owner)
+		if err == nil {
+			return 0, fmt.Errorf("device WA %q sudah dipakai tenant lain (tenant %d). Setiap toko butuh nomor/device WhatsApp sendiri.", deviceID, owner)
+		}
+		if err != sql.ErrNoRows {
+			return 0, err
+		}
+	}
+
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
 		INSERT INTO wa_accounts (tenant_id, username, password, device_id, is_active)
@@ -721,7 +714,7 @@ func (s *Store) UpsertWAAccount(ctx context.Context, username, password, deviceI
 		ON CONFLICT (tenant_id, username) DO UPDATE SET password = EXCLUDED.password,
 			device_id = EXCLUDED.device_id, is_active = EXCLUDED.is_active, updated_at = $6
 		RETURNING id`),
-		s.tid(ctx), username, s.enc(password), deviceID, isActive, time.Now()).Scan(&id)
+		tid, username, s.enc(password), deviceID, isActive, time.Now()).Scan(&id)
 	return id, err
 }
 
@@ -855,32 +848,29 @@ func (s *Store) SearchKnowledgeChunks(ctx context.Context, query string, limit i
 
 	candidates := map[int64]string{}
 
-	// 1) Full-text search — khusus Postgres (to_tsvector). SQLite memakai LIKE.
-	if s.dialect != "sqlite" {
-		rows, err := s.db.QueryContext(ctx, s.q(`
+	// 1) Full-text search Postgres (to_tsvector).
+	rows, err := s.db.QueryContext(ctx, s.q(`
 			SELECT id, content FROM knowledge_chunks
 			WHERE tenant_id = $1 AND to_tsvector('simple', content) @@ plainto_tsquery('simple', $2)
 			ORDER BY ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', $2)) DESC
 			LIMIT 20`), s.tid(ctx), q)
-		if err == nil {
-			for rows.Next() {
-				var id int64
-				var c string
-				if err := rows.Scan(&id, &c); err != nil {
-					rows.Close()
-					return nil, err
-				}
-				candidates[id] = c
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
+	if err == nil {
+		for rows.Next() {
+			var id int64
+			var c string
+			if err := rows.Scan(&id, &c); err != nil {
+				rows.Close()
 				return nil, err
 			}
+			candidates[id] = c
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 	}
 
-	// 2) Cadangan: LIKE bila full-text tidak menemukan cukup (berlaku untuk
-	//    Postgres maupun SQLite).
+	// 2) Cadangan: LIKE bila full-text tidak menemukan cukup.
 	if len(candidates) < limit {
 		var where strings.Builder
 		args := []any{s.tid(ctx)}

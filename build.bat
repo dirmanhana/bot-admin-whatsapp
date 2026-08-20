@@ -1,7 +1,9 @@
 @echo off
 REM ============================================================
-REM  Build bot-admin-whatsapp.exe (mode SQLite, tanpa CGO)
+REM  Build bot-admin-whatsapp.exe (Windows)
 REM  Jalankan: build.bat  (butuh Go terpasang: https://go.dev/dl)
+REM  Catatan: aplikasi ini butuh PostgreSQL — pastikan DATABASE_URL
+REM  di .env menunjuk ke server PostgreSQL yang berjalan.
 REM ============================================================
 setlocal
 

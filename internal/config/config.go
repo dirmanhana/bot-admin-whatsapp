@@ -11,9 +11,7 @@ import (
 
 type Config struct {
 	Port                string
-	DBDriver            string // "postgres" | "sqlite"
 	DatabaseURL         string
-	SQLitePath          string
 	GowaBaseURL         string
 	GowaWebhookURL      string
 	GowaWebhookSecret   string
@@ -43,9 +41,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Port:                getEnv("PORT", "8080"),
-		DBDriver:            getEnv("DB_DRIVER", "postgres"),
 		DatabaseURL:         getEnv("DATABASE_URL", "postgres://dirman@127.0.0.1:5433/bot_admin_whatsapp?sslmode=disable"),
-		SQLitePath:          getEnv("SQLITE_PATH", "bot_admin_whatsapp.db"),
 		GowaBaseURL:         getEnv("GOWA_BASE_URL", "http://127.0.0.1:3000"),
 		GowaWebhookURL:      getEnv("GOWA_WEBHOOK_URL", ""),
 		GowaWebhookSecret:   getEnv("GOWA_WEBHOOK_SECRET", "secret"),

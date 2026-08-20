@@ -16,3 +16,6 @@
 
 # db backup
 *.db.bak*
+
+# upload gambar produk
+/data/

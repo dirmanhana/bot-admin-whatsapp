@@ -2,41 +2,46 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// openTestDB membuat DB SQLite sementara (file, bukan in-memory, agar pragma
-// WAL/foreign_keys berfungsi) dan menjalankan semua migrasi.
-func openTestDB(t *testing.T) (*sql.DB, *Store) {
-	t.Helper()
-	dsn := "file:" + filepath.Join(t.TempDir(), "test.db")
-	db, err := Open(context.Background(), "sqlite", dsn)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
+// testDSNWithDB mengembalikan DSN test untuk database tertentu.
+func testDSNWithDB(dbName string) string {
+	base := testDSN()
+	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+		rest := base[idx+1:]
+		if q := strings.Index(rest, "?"); q >= 0 {
+			return base[:idx+1] + dbName + rest[q:]
+		}
+		return base[:idx+1] + dbName
 	}
-	t.Cleanup(func() { db.Close() })
-	st := New(db, "sqlite")
-	if err := st.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if err := st.SeedTenant1(context.Background(), "admin@example.com", "hash1"); err != nil {
-		t.Fatalf("seed tenant1: %v", err)
-	}
-	return db, st
+	return base
 }
 
 func TestMigrateLegacyToMultiTenant(t *testing.T) {
-	// Simulasikan DB lama (sebelum 0007): jalankan migrasi 0001–0006 lalu
-	// isi data, kemudian Migrate() harus menerapkan 0007 dan data lama
-	// otomatis milik tenant 1.
-	dsn := "file:" + filepath.Join(t.TempDir(), "legacy.db")
-	db, err := Open(context.Background(), "sqlite", dsn)
+	// Simulasikan DB lama (sebelum 0007): database sementara diisi migrasi
+	// 0001–0006 + data, lalu Migrate() menerapkan 0007 dan data lama otomatis
+	// milik tenant 1. Database khusus agar skemanya benar-benar fresh.
+	admin, err := Open(context.Background(), testDSN())
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Skipf("postgres tidak tersedia, skip: %v", err)
+	}
+	defer admin.Close()
+	resetSchema(t, admin)
+
+	dbName := "bot_admin_whatsapp_legacy_test"
+	if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + dbName); err != nil {
+		t.Fatalf("drop legacy db: %v", err)
+	}
+	if _, err := admin.Exec(`CREATE DATABASE ` + dbName); err != nil {
+		t.Fatalf("create legacy db: %v", err)
+	}
+	defer func() { _, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + dbName) }()
+
+	db, err := Open(context.Background(), testDSNWithDB(dbName))
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
 	}
 	defer db.Close()
 
@@ -44,18 +49,18 @@ func TestMigrateLegacyToMultiTenant(t *testing.T) {
 		"0001_init.sql", "0002_ai.sql", "0003_product_ai.sql",
 		"0004_drop_product_ai_prompt.sql", "0005_cart_delivery_usage.sql", "0006_order_session_delivery.sql",
 	}
-	if _, err := db.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		t.Fatalf("create schema_migrations: %v", err)
 	}
 	for _, name := range legacy {
-		b, err := migrationsFS.ReadFile("migrations/sqlite/" + name)
+		b, err := migrationsFS.ReadFile("migrations/postgres/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
 		if _, err := db.Exec(string(b)); err != nil {
 			t.Fatalf("apply %s: %v", name, err)
 		}
-		if _, err := db.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, name); err != nil {
+		if _, err := db.Exec(`INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
 			t.Fatalf("mark %s: %v", name, err)
 		}
 	}
@@ -72,7 +77,7 @@ func TestMigrateLegacyToMultiTenant(t *testing.T) {
 	}
 
 	// Terapkan migrasi selanjutnya (0007).
-	st := New(db, "sqlite")
+	st := New(db)
 	if err := st.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate 0007: %v", err)
 	}
@@ -97,15 +102,6 @@ func TestMigrateLegacyToMultiTenant(t *testing.T) {
 	}
 	if p, _ := st.ListProducts(ctx2, false); len(p) != 0 {
 		t.Fatalf("tenant2 melihat produk tenant1: %+v", p)
-	}
-
-	// foreign_key_check tidak boleh ada pelanggaran setelah rebuild.
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_check`).Scan(&n); err != nil {
-		t.Fatalf("fk check: %v", err)
-	}
-	if n != 0 {
-		t.Fatalf("foreign_key_check menemukan %d pelanggaran", n)
 	}
 }
 
@@ -151,7 +147,7 @@ func TestTenantIsolation(t *testing.T) {
 		t.Fatalf("nama customer tertukar: %q vs %q", c1.Name, c2.Name)
 	}
 
-	// Order + nomor order unik per tenant.
+	// Order + nomor order unik per tenant (masing-masing mulai 0001).
 	o1, err := st.CreateOrder(ctx1, c1.ID, "Jl. A", "kirim", 5000, []OrderItem{{ProductID: p1[0].ID, ProductName: "Produk T1", Price: 1000, Qty: 2}})
 	if err != nil {
 		t.Fatalf("create order t1: %v", err)
@@ -160,7 +156,6 @@ func TestTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create order t2: %v", err)
 	}
-	// Nomor order hanya wajib unik per tenant; masing-masing mulai dari 0001.
 	if !strings.HasSuffix(o1.OrderNumber, "-0001") || !strings.HasSuffix(o2.OrderNumber, "-0001") {
 		t.Fatalf("nomor order per tenant salah: %s vs %s", o1.OrderNumber, o2.OrderNumber)
 	}
@@ -210,6 +205,11 @@ func TestTenantIsolation(t *testing.T) {
 	tid2, _ := st.TenantIDByDeviceID(context.Background(), "dev-2")
 	if tid1 != 1 || tid2 != 2 {
 		t.Fatalf("resolve device salah: dev-1→%d, dev-2→%d", tid1, tid2)
+	}
+
+	// Device yang sama tidak boleh dipakai tenant lain (sumber kebocoran).
+	if _, err := st.UpsertWAAccount(ctx2, "user2", "pass2", "dev-1", true); err == nil {
+		t.Fatal("device dev-1 milik tenant1 harus ditolak untuk tenant2")
 	}
 
 	// Order session per tenant (pelanggan sama, toko beda).
@@ -265,5 +265,4 @@ func TestCreateOrderSequencePerTenant(t *testing.T) {
 	if !strings.HasSuffix(o1a.OrderNumber, "-0001") || !strings.HasSuffix(o1b.OrderNumber, "-0002") || !strings.HasSuffix(o2a.OrderNumber, "-0001") {
 		t.Fatalf("nomor order salah: %s, %s, %s", o1a.OrderNumber, o1b.OrderNumber, o2a.OrderNumber)
 	}
-	_ = fmt.Sprint() // keep fmt import
 }

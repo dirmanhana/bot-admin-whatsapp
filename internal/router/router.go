@@ -183,14 +183,14 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 
 	// Jawaban AI berbasis knowledge base (katalog, produk, dll.) + memori percakapan
 	if r.ai != nil {
-// Kuota harian per pelanggan agar biaya AI terkendali.
-	day := time.Now().Format("2006-01-02")
-	quota := r.storeSettings(ctx).AIDailyQuota
-	used, err := r.store.GetAIUsageCount(ctx, c.ID, day)
-	if err == nil && quota > 0 && used >= quota {
-		r.reply(ctx, c, "Maaf, pertanyaan gratis hari ini sudah habis. Hubungi admin untuk bantuan lebih lanjut.")
-		return
-	}
+		// Kuota harian per pelanggan agar biaya AI terkendali.
+		day := time.Now().Format("2006-01-02")
+		quota := r.storeSettings(ctx).AIDailyQuota
+		used, err := r.store.GetAIUsageCount(ctx, c.ID, day)
+		if err == nil && quota > 0 && used >= quota {
+			r.reply(ctx, c, "Maaf, pertanyaan gratis hari ini sudah habis. Hubungi admin untuk bantuan lebih lanjut.")
+			return
+		}
 		historyLimit := 15
 		if st := r.storeSettings(ctx); st.AIMaxHistory > 0 {
 			historyLimit = st.AIMaxHistory

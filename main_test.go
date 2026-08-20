@@ -4,26 +4,49 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"path/filepath"
+	"os"
 	"testing"
 
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
 )
 
-// testStore menyiapkan DB SQLite sementara dengan tenant 1 (seed) dan
-// tenant 2 yang punya device gowa "dev-2".
+func testDSN() string {
+	if dsn := os.Getenv("TEST_DATABASE_URL"); dsn != "" {
+		return dsn
+	}
+	return "postgres://dirman@127.0.0.1:5433/bot_admin_whatsapp_test?sslmode=disable"
+}
+
+// truncateAll mengosongkan semua tabel (skema & migrasi tetap).
+func truncateAll(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec(`DO $$ DECLARE r record; BEGIN
+		FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'schema_migrations' LOOP
+			EXECUTE format('TRUNCATE TABLE public.%I CASCADE', r.tablename);
+		END LOOP;
+	END $$`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, _ = db.Exec(`SELECT setval('tenants_id_seq', 1, false)`)
+}
+
+// testStore menyiapkan DB Postgres dengan tenant 1 (seed) dan tenant 2 yang
+// punya device gowa "dev-2".
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
-	dsn := "file:" + filepath.Join(t.TempDir(), "wh.db")
-	db, err := store.Open(context.Background(), "sqlite", dsn)
+	db, err := store.Open(context.Background(), testDSN())
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Skipf("postgres tidak tersedia, skip: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	st := store.New(db, "sqlite")
+
+	truncateAll(t, db)
+
+	st := store.New(db)
 	if err := st.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -81,13 +104,15 @@ func TestResolveWebhookTenantGlobalSecret(t *testing.T) {
 		t.Fatalf("global secret + dev-2: tid=%d err=%v", tid, err)
 	}
 
-	// Device tak dikenal + signature global → fallback tenant 1 (legacy).
-	tid, err = resolveWebhookTenant(webhookBody("dev-tidak-dikenal"), sign("global-secret", webhookBody("dev-tidak-dikenal")), st, cfg)
-	if err != nil || tid != 1 {
-		t.Fatalf("device tak dikenal: tid=%d err=%v", tid, err)
+	// Device tak dikenal + signature global → DITOLAK (fail-closed, tidak
+	// boleh jatuh ke tenant 1).
+	unknown := webhookBody("dev-tidak-dikenal")
+	tid, err = resolveWebhookTenant(unknown, sign("global-secret", unknown), st, cfg)
+	if err == nil {
+		t.Fatalf("device tak dikenal harus ditolak, dapat tid=%d", tid)
 	}
 
-	// Signature global salah → harus ditolak (bukan jatuh ke tenant lain).
+	// Signature global salah → ditolak.
 	_, err = resolveWebhookTenant(body, sign("salah", body), st, cfg)
 	if err == nil {
 		t.Fatal("signature salah harus ditolak")
@@ -96,7 +121,6 @@ func TestResolveWebhookTenantGlobalSecret(t *testing.T) {
 
 func TestResolveWebhookTenantPerTenantSecret(t *testing.T) {
 	st := testStore(t)
-	// Ambil secret tenant 2.
 	secret2, err := st.TenantWebhookSecret(context.Background(), 2)
 	if err != nil || secret2 == "" {
 		t.Fatalf("secret tenant2: %q %v", secret2, err)
@@ -117,7 +141,8 @@ func TestResolveWebhookTenantPerTenantSecret(t *testing.T) {
 	}
 
 	// Device tak dikenal + signature apa pun (bukan global) → ditolak.
-	_, err = resolveWebhookTenant(webhookBody("dev-x"), sign("random", webhookBody("dev-x")), st, cfg)
+	unknown := webhookBody("dev-x")
+	_, err = resolveWebhookTenant(unknown, sign("random", unknown), st, cfg)
 	if err == nil {
 		t.Fatal("device tak dikenal dengan secret non-global harus ditolak")
 	}

@@ -50,18 +50,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// --- Database ---
-	dsn := cfg.DatabaseURL
-	if cfg.DBDriver == "sqlite" {
-		dsn = cfg.SQLitePath
-	}
-	db, err := store.Open(ctx, cfg.DBDriver, dsn)
+	// --- Database (PostgreSQL) ---
+	db, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
 	defer db.Close()
 
-	st := store.New(db, cfg.DBDriver)
+	st := store.New(db)
 	st.SetCipher(cipher)
 	if err := st.Migrate(ctx); err != nil {
 		log.Fatalf("migrate: %v", err)
@@ -175,38 +171,47 @@ func verifyHMAC(secret string, body []byte, sig string) bool {
 
 // resolveWebhookTenant memvalidasi signature webhook lalu menentukan tenant
 // pemilik pesan. Urutan:
-//  1. Secret global (.env) — mode lama/kompatibel; tenant ditentukan dari
-//     device_id payload (fallback tenant 1).
-//  2. Secret per tenant — device_id payload dicocokkan ke tenant, lalu
-//     signature diverifikasi dengan secret tenant tsb.
+//  1. Device_id payload dicocokkan ke tenant (wa_accounts.device_id) — jika
+//     dikenal, signature diverifikasi terhadap secret tenant tsb.
+//  2. Secret global (.env) — mode lama/kompatibel; setelah lolos, tenant
+//     tetap ditentukan dari device_id (fail-closed: device tak dikenal
+//     DITOLAK, bukan jatuh ke tenant 1).
 //
 // Signature tidak pernah dipercaya sebelum diverifikasi, sehingga
-// device_id palsu tidak bisa membajak tenant lain.
+// device_id palsu tidak bisa membajak tenant lain. Satu device gowa hanya
+// boleh milik satu tenant (dipastikan saat simpan akun WA).
 func resolveWebhookTenant(body []byte, sig string, st *store.Store, cfg *config.Config) (int64, error) {
 	var wp router.WebhookPayload
 	if err := json.Unmarshal(body, &wp); err != nil {
 		return 0, errors.New("payload tidak valid")
 	}
 
-	if verifyHMAC(cfg.GowaWebhookSecret, body, sig) {
-		if tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID); err == nil && tid > 0 {
-			return tid, nil
+	// 1) Secret khusus tenant (alur utama multi-tenant).
+	if wp.DeviceID != "" {
+		tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID)
+		if err != nil {
+			return 0, errors.New("gagal membaca device")
 		}
-		return 1, nil // legacy: semua pesan tanpa device dikenal milik tenant 1
+		if tid > 0 {
+			secret, err := st.TenantWebhookSecret(context.Background(), tid)
+			if err == nil && verifyHMAC(secret, body, sig) {
+				return tid, nil
+			}
+		}
 	}
 
-	if wp.DeviceID == "" {
-		return 0, errors.New("signature tidak cocok dan tanpa device_id")
-	}
-	tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID)
-	if err != nil || tid <= 0 {
+	// 2) Secret global (legacy). Tetap resolve device -> tenant; device tak
+	//    dikenal ditolak agar pesan tidak jatuh ke tenant yang salah.
+	if verifyHMAC(cfg.GowaWebhookSecret, body, sig) {
+		if wp.DeviceID != "" {
+			if tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID); err == nil && tid > 0 {
+				return tid, nil
+			}
+		}
 		return 0, errors.New("device tidak dikenal")
 	}
-	secret, err := st.TenantWebhookSecret(context.Background(), tid)
-	if err != nil || !verifyHMAC(secret, body, sig) {
-		return 0, errors.New("signature tenant tidak cocok")
-	}
-	return tid, nil
+
+	return 0, errors.New("signature tidak cocok")
 }
 
 // broadcastWorker periodically picks up pending broadcasts and sends them
