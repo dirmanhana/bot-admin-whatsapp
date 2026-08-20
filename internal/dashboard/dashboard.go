@@ -5,11 +5,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"mime"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,10 +132,11 @@ func (s *Server) Register(app *fiber.App) {
 	admin := app.Group("/admin")
 
 	admin.Get("/login", s.pageLogin)
-	admin.Post("/login", s.actionLogin)
-	admin.Post("/logout", s.actionLogout)
+	admin.Post("/login", s.requireCSRF, s.actionLogin)
+	admin.Post("/logout", s.requireCSRF, s.actionLogout)
 
 	admin.Use(s.requireAuth)
+	admin.Use(s.requireCSRF)
 
 	admin.Get("/", func(c *fiber.Ctx) error { return c.Redirect("/admin/overview") })
 	admin.Get("/overview", s.pageOverview)
@@ -197,6 +200,7 @@ func (s *Server) serveUpload(c *fiber.Ctx) error {
 // ---------- auth ----------
 
 const sessionCookie = "admin_session"
+const sessionTTL = 24 * time.Hour
 
 func (s *Server) sign(v string) string {
 	mac := hmac.New(sha256.New, []byte(s.cfg.SessionSecret))
@@ -204,21 +208,55 @@ func (s *Server) sign(v string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (s *Server) sessionValue() string {
-	return s.cfg.DashboardUser + "." + s.sign(s.cfg.DashboardUser)
+// sessionValue = "<user>.<epoch>.<exp>.<sign>". epoch naik saat password
+// diubah (semua sesi lama invalid); exp = waktu kedaluwarsa unix.
+func (s *Server) sessionValue(epoch, exp int64) string {
+	payload := fmt.Sprintf("%s.%d.%d", s.cfg.DashboardUser, epoch, exp)
+	return payload + "." + s.sign(payload)
+}
+
+// parseSession memvalidasi cookie sesi. Mengembalikan epoch bila valid.
+func (s *Server) parseSession(c *fiber.Ctx) (bool, int64) {
+	v := c.Cookies(sessionCookie)
+	if v == "" {
+		return false, 0
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 4 {
+		return false, 0
+	}
+	payload := strings.Join(parts[:3], ".")
+	epoch, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return false, 0
+	}
+	exp, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || exp < time.Now().Unix() {
+		return false, 0
+	}
+	if !hmac.Equal([]byte(parts[3]), []byte(s.sign(payload))) {
+		return false, 0
+	}
+	cur := s.settings.SessionEpoch(c.Context())
+	if epoch != cur {
+		return false, 0
+	}
+	return true, epoch
 }
 
 func (s *Server) requireAuth(c *fiber.Ctx) error {
-	if c.Cookies(sessionCookie) == s.sessionValue() {
+	if ok, _ := s.parseSession(c); ok {
 		return c.Next()
 	}
 	return c.Redirect("/admin/login")
 }
 
 func (s *Server) setSession(c *fiber.Ctx) {
+	epoch := s.settings.SessionEpoch(c.Context())
+	exp := time.Now().Add(sessionTTL).Unix()
 	c.Cookie(&fiber.Cookie{
 		Name:     sessionCookie,
-		Value:    s.sessionValue(),
+		Value:    s.sessionValue(epoch, exp),
 		Path:     "/",
 		HTTPOnly: true,
 		SameSite: "Lax",
@@ -236,6 +274,33 @@ func (s *Server) clearSession(c *fiber.Ctx) {
 	})
 }
 
+// ---------- CSRF ----------
+
+// csrfToken menghasilkan token per sesi (atau per IP untuk halaman
+// pra-login). Token tidak pernah bocor ke origin lain, sehingga POST
+// dari situs pihak ketiga gagal diverifikasi.
+func (s *Server) csrfToken(c *fiber.Ctx) string {
+	if ok, epoch := s.parseSession(c); ok {
+		return s.sign(fmt.Sprintf("csrf:%s:%d", s.cfg.DashboardUser, epoch))
+	}
+	return s.sign("csrf:ip:" + c.IP())
+}
+
+func (s *Server) requireCSRF(c *fiber.Ctx) error {
+	if c.Method() != fiber.MethodPost {
+		return c.Next()
+	}
+	want := s.csrfToken(c)
+	got := c.FormValue("_csrf")
+	if got == "" {
+		got = c.Get("X-CSRF-Token")
+	}
+	if !hmac.Equal([]byte(got), []byte(want)) {
+		return c.Status(fiber.StatusForbidden).SendString("CSRF token tidak valid. Muat ulang halaman lalu coba lagi.")
+	}
+	return c.Next()
+}
+
 // ---------- view helpers ----------
 
 type view struct {
@@ -246,6 +311,7 @@ type view struct {
 	Msg    string
 	Err    string
 	Banner string
+	CSRF   string
 	Nav    []navItem
 	Data   any
 }
@@ -282,6 +348,7 @@ func (s *Server) render(c *fiber.Ctx, name string, v view) error {
 	v.Msg = c.Query("msg")
 	v.Err = c.Query("err")
 	v.Banner = s.securityBanner()
+	v.CSRF = s.csrfToken(c)
 	v.Nav = navItems
 	c.Set("Content-Type", "text/html; charset=utf-8")
 	return s.tpl.ExecuteTemplate(c, name, v)

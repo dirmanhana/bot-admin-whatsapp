@@ -11,15 +11,48 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register driver "pgx" untuk database/sql
 	_ "modernc.org/sqlite"             // register driver "sqlite" (murni Go)
+
+	"github.com/dirman/bot-admin-whatsapp/internal/cryptx"
 )
 
 type Store struct {
 	db      *sql.DB
 	dialect string // "postgres" | "sqlite"
+	cipher  *cryptx.Cipher
 }
 
 func New(db *sql.DB, dialect string) *Store {
 	return &Store{db: db, dialect: dialect}
+}
+
+// SetCipher memasang enkripsi untuk kredensial (password/token gowa).
+// Tanpa cipher, nilai disimpan/dibaca polos (mode lama).
+func (s *Store) SetCipher(c *cryptx.Cipher) {
+	s.cipher = c
+}
+
+// enc mengamankan nilai sebelum disimpan ke DB; kosong bila tanpa cipher.
+func (s *Store) enc(v string) string {
+	if s.cipher == nil || v == "" {
+		return v
+	}
+	out, err := s.cipher.Encrypt(v)
+	if err != nil {
+		return v
+	}
+	return out
+}
+
+// dec membaca nilai dari DB; data lama (tanpa prefix "enc:") tetap terbaca.
+func (s *Store) dec(v string) string {
+	if s.cipher == nil || v == "" {
+		return v
+	}
+	out, err := s.cipher.Decrypt(v)
+	if err != nil {
+		return v
+	}
+	return out
 }
 
 // q mengembalikan SQL sesuai dialect. SQLite tidak mengenal placeholder $N,
@@ -617,6 +650,8 @@ func (s *Store) ListWAAccounts(ctx context.Context) ([]WAAccount, error) {
 			return nil, err
 		}
 		a.TokenExpiresAt = nullableTimePtr(exp)
+		a.Username = s.dec(a.Username)
+		a.Token = s.dec(a.Token)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -635,6 +670,9 @@ func (s *Store) GetWAAccountByUsername(ctx context.Context, username string) (*W
 		return nil, err
 	}
 	a.TokenExpiresAt = nullableTimePtr(exp)
+	a.Username = s.dec(a.Username)
+	a.Password = s.dec(a.Password)
+	a.Token = s.dec(a.Token)
 	return &a, nil
 }
 
@@ -651,6 +689,9 @@ func (s *Store) GetActiveWAAccount(ctx context.Context) (*WAAccount, error) {
 		return nil, err
 	}
 	a.TokenExpiresAt = nullableTimePtr(exp)
+	a.Username = s.dec(a.Username)
+	a.Password = s.dec(a.Password)
+	a.Token = s.dec(a.Token)
 	return &a, nil
 }
 
@@ -662,7 +703,7 @@ func (s *Store) UpsertWAAccount(ctx context.Context, username, password, deviceI
 		ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password,
 			device_id = EXCLUDED.device_id, is_active = EXCLUDED.is_active, updated_at = $5
 		RETURNING id`),
-		username, password, deviceID, isActive, time.Now()).Scan(&id)
+		username, s.enc(password), deviceID, isActive, time.Now()).Scan(&id)
 	return id, err
 }
 
@@ -683,7 +724,7 @@ func (s *Store) SetWAAccountActive(ctx context.Context, id int64) error {
 
 func (s *Store) UpdateWAToken(ctx context.Context, id int64, token string, expiresAt time.Time) error {
 	_, err := s.db.ExecContext(ctx, s.q(`UPDATE wa_accounts SET token = $1, token_expires_at = $2, updated_at = $3 WHERE id = $4`),
-		token, expiresAt, time.Now(), id)
+		s.enc(token), expiresAt, time.Now(), id)
 	return err
 }
 

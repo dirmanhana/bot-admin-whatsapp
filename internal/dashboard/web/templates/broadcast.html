@@ -4,6 +4,7 @@
 <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
   <h2 class="mb-3 font-heading text-sm font-semibold tracking-tight">Kirim Broadcast Baru</h2>
   <form method="post" action="/admin/broadcast" class="flex flex-col gap-1">
+    <input type="hidden" name="_csrf" value="{{$.CSRF}}">
     <label class="text-sm text-muted-foreground">Pesan</label>
     <textarea name="message" rows="4" required placeholder="Halo {{.Store}}..."
       class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm"></textarea>

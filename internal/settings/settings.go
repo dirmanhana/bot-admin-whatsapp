@@ -23,6 +23,7 @@ const (
 	KeyAIDailyQuota   = "ai_daily_quota"
 	KeyAIMaxTokens    = "ai_max_tokens"
 	KeyDashPassword   = "dashboard_password_hash"
+	KeyDashSessionEpoch = "dashboard_session_epoch"
 )
 
 // Settings adalah pengaturan toko yang disimpan di tabel settings.
@@ -125,6 +126,30 @@ func (s *Service) InvalidateCache() {
 	s.mu.Lock()
 	s.cached = nil
 	s.mu.Unlock()
+}
+
+// SessionEpoch membaca epoch sesi langsung dari DB (tanpa cache) agar
+// invalidasi sesi berlaku seketika. Default 0 bila belum pernah disetel.
+func (s *Service) SessionEpoch(ctx context.Context) int64 {
+	kv, err := s.store.GetSettings(ctx)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(kv[KeyDashSessionEpoch], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// BumpSessionEpoch menaikkan epoch sesi; semua sesi lama menjadi tidak valid.
+func (s *Service) BumpSessionEpoch(ctx context.Context) error {
+	epoch := s.SessionEpoch(ctx) + 1
+	if err := s.store.SetSetting(ctx, KeyDashSessionEpoch, strconv.FormatInt(epoch, 10)); err != nil {
+		return err
+	}
+	s.InvalidateCache()
+	return nil
 }
 
 func firstNonEmpty(vals ...string) string {

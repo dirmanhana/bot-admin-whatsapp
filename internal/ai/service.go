@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
+	"github.com/dirman/bot-admin-whatsapp/internal/cryptx"
 	"github.com/dirman/bot-admin-whatsapp/internal/settings"
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
 )
@@ -34,9 +35,10 @@ const (
 
 // Service menyediakan jawaban AI berbasis knowledge base (RAG sederhana).
 type Service struct {
-	store *store.Store
-	cfg   *config.Config
-	stg   *settings.Service
+	store  *store.Store
+	cfg    *config.Config
+	stg    *settings.Service
+	cipher *cryptx.Cipher
 
 	mu       sync.Mutex
 	cached   *Settings
@@ -55,8 +57,8 @@ type cacheEntry struct {
 
 const cacheTTL = 2 * time.Hour
 
-func New(st *store.Store, cfg *config.Config, stg *settings.Service) *Service {
-	return &Service{store: st, cfg: cfg, stg: stg, cache: map[string]cacheEntry{}}
+func New(st *store.Store, cfg *config.Config, stg *settings.Service, cipher *cryptx.Cipher) *Service {
+	return &Service{store: st, cfg: cfg, stg: stg, cipher: cipher, cache: map[string]cacheEntry{}}
 }
 
 // Settings memuat konfigurasi AI; nilai dari database menang atas .env.
@@ -84,10 +86,16 @@ func (s *Service) Settings(ctx context.Context) (*Settings, error) {
 			model = p.Model
 		}
 	}
+	apiKey := kv[keyAPIKey]
+	if s.cipher != nil && apiKey != "" {
+		if k, err := s.cipher.Decrypt(apiKey); err == nil {
+			apiKey = k
+		}
+	}
 	st := &Settings{
 		Provider: prov,
 		BaseURL:  baseURL,
-		APIKey:   firstNonEmpty(kv[keyAPIKey], s.cfg.AIAPIKey),
+		APIKey:   firstNonEmpty(apiKey, s.cfg.AIAPIKey),
 		Model:    model,
 		Enabled:  kv[keyEnabled] == "1",
 	}
@@ -107,10 +115,16 @@ func (s *Service) SaveSettings(ctx context.Context, st Settings) error {
 	if p := ProviderByKey(st.Provider); p != nil && st.BaseURL == "" {
 		st.BaseURL = p.BaseURL
 	}
+	key := st.APIKey
+	if s.cipher != nil && key != "" {
+		if k, err := s.cipher.Encrypt(key); err == nil {
+			key = k
+		}
+	}
 	vals := map[string]string{
 		keyProvider: st.Provider,
 		keyBaseURL:  st.BaseURL,
-		keyAPIKey:   st.APIKey,
+		keyAPIKey:   key,
 		keyModel:    st.Model,
 		keyEnabled:  "0",
 	}

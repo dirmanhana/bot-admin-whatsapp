@@ -72,6 +72,9 @@ func Load() (*Config, error) {
 	if cfg.SessionSecret == "insecure-session-secret" || cfg.SessionSecret == "ubah-saya-session-secret-sangat-rahasia" {
 		fmt.Println("[warn] SESSION_SECRET masih default. Ganti di .env untuk produksi.")
 	}
+	if cfg.GowaWebhookSecret == "secret" {
+		fmt.Println("[warn] GOWA_WEBHOOK_SECRET masih default. Aplikasi akan menolak berjalan sampai diubah.")
+	}
 	return cfg, nil
 }
 

@@ -29,6 +29,7 @@
           <span class="flex size-6 items-center justify-center rounded-full bg-secondary">{{icon "users"}}</span>
           <span class="truncate">{{.User}}</span>
           <form method="post" action="/admin/logout" class="ml-auto">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
             <button class="inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted hover:text-foreground" type="submit">
               {{icon "logout"}}<span>Keluar</span>
             </button>

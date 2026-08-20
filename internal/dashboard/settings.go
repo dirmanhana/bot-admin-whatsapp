@@ -71,7 +71,10 @@ func (s *Server) actionSettingsSave(c *fiber.Ctx) error {
 		if err := s.store.SetSetting(ctx, settings.KeyDashPassword, string(hash)); err != nil {
 			return redirect(c, "/admin/settings", "Gagal menyimpan password: "+err.Error(), true)
 		}
-		msg = "Pengaturan disimpan. Password dashboard diperbarui."
+		if err := s.settings.BumpSessionEpoch(ctx); err != nil {
+			return redirect(c, "/admin/settings", "Password tersimpan, tapi gagal membatalkan sesi lama: "+err.Error(), true)
+		}
+		msg = "Pengaturan disimpan. Password dashboard diperbarui — silakan masuk ulang."
 	}
 	return redirect(c, "/admin/settings", msg, false)
 }

@@ -4,6 +4,7 @@
 <div class="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10">
   <h2 class="mb-3 font-heading text-sm font-semibold tracking-tight">Tambah Produk</h2>
   <form method="post" action="/admin/products" enctype="multipart/form-data" class="flex flex-col gap-1">
+    <input type="hidden" name="_csrf" value="{{$.CSRF}}">
     <div class="grid gap-3 grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-foreground">Nama</label>
@@ -85,6 +86,7 @@
             <details class="group">
               <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground list-none">Ubah</summary>
               <form method="post" action="/admin/products/{{.ID}}" enctype="multipart/form-data" class="mt-2 flex flex-col gap-1 rounded-lg border bg-muted/40 p-3">
+                <input type="hidden" name="_csrf" value="{{$.CSRF}}">
                 <div class="grid gap-3 grid-cols-2">
                   <div class="flex flex-col gap-1">
                     <label class="text-sm text-muted-foreground">Nama</label>

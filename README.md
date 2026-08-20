@@ -325,12 +325,36 @@ Semua di bawah `/admin` — lihat [docs/api.md](docs/api.md) untuk detail lengka
 ## Keamanan
 
 - **Jangan commit `.env`** (sudah di-`.gitignore`).
-- Ganti `DASHBOARD_PASSWORD` dan `SESSION_SECRET` sebelum dipakai produksi.
-- Webhook memverifikasi header `X-Webhook-Secret` bila `GOWA_WEBHOOK_SECRET` diubah dari default.
-- Sesi dashboard berupa cookie HttpOnly + HMAC (`SESSION_SECRET`).
-- Password akun gowa & token tersimpan di DB (`wa_accounts`) — lindungi akses DB.
-- API key AI tersimpan di tabel `settings` — jangan tampilkan ke publik.
-- Saran produksi: jalankan di belakang reverse proxy dengan HTTPS (mis. Caddy/Nginx).
+- Ganti `DASHBOARD_PASSWORD`, `SESSION_SECRET`, dan `GOWA_WEBHOOK_SECRET` sebelum dipakai produksi.
+- **`GOWA_WEBHOOK_SECRET` wajib** — aplikasi menolak berjalan bila masih default (`secret`). Webhook memverifikasi header `X-Hub-Signature-256` (HMAC-SHA256) pada setiap request.
+- Sesi dashboard berupa cookie HttpOnly + HMAC (`SESSION_SECRET`), kedaluwarsa **24 jam**; ganti password langsung membatalkan semua sesi lama.
+- Semua POST dashboard wajib menyertakan token CSRF (`_csrf`, ditanam di form).
+- Login dibatasi 5x percobaan gagal → terkunci 15 menit per IP.
+- Password & token gowa (`wa_accounts`) serta API key AI dienkripsi **AES-GCM** di DB memakai kunci turunan `SESSION_SECRET`. Data lama (polos) tetap terbaca saat migrasi, lalu terenkripsi ulang saat penyimpanan berikutnya.
+- Webhook diproses maksimal 32 bersamaan; sisanya ditolak 503 (anti-flood).
+- Log webhook disamarkan (nomor HP & isi chat) via `LOG_REDACT`.
+- Saran produksi: jalankan di belakang reverse proxy dengan HTTPS (mis. Caddy/Nginx) — contoh:
+
+  ```caddyfile
+  bot.example.com {
+      reverse_proxy 127.0.0.1:8080
+  }
+  ```
+
+  ```nginx
+  server {
+      listen 443 ssl;
+      server_name bot.example.com;
+      ssl_certificate     /etc/letsencrypt/live/bot.example.com/fullchain.pem;
+      ssl_certificate_key /etc/letsencrypt/live/bot.example.com/privkey.pem;
+      location / {
+          proxy_pass http://127.0.0.1:8080;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      }
+  }
+  ```
+
+- Jangan mengekspos port dashboard ke internet tanpa HTTPS + password kuat.
 
 ---
 

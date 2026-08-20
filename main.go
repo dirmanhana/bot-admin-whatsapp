@@ -18,6 +18,7 @@ import (
 
 	"github.com/dirman/bot-admin-whatsapp/internal/ai"
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
+	"github.com/dirman/bot-admin-whatsapp/internal/cryptx"
 	"github.com/dirman/bot-admin-whatsapp/internal/dashboard"
 	"github.com/dirman/bot-admin-whatsapp/internal/gowaclient"
 	"github.com/dirman/bot-admin-whatsapp/internal/router"
@@ -29,6 +30,18 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+
+	// Webhook tanpa secret yang aman tidak boleh berjalan — siapa pun bisa
+	// menyuntikkan pesan palsu ke bot.
+	if cfg.GowaWebhookSecret == "" || cfg.GowaWebhookSecret == "secret" {
+		log.Fatalf("GOWA_WEBHOOK_SECRET wajib diisi dengan nilai rahasia (default \"secret\" tidak diizinkan). Set di .env lalu jalankan ulang.")
+	}
+
+	// Kunci enkripsi kredensial di DB diturunkan dari SESSION_SECRET.
+	cipher, err := cryptx.New(cfg.SessionSecret)
+	if err != nil {
+		log.Fatalf("cipher: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,6 +59,7 @@ func main() {
 	defer db.Close()
 
 	st := store.New(db, cfg.DBDriver)
+	st.SetCipher(cipher)
 	if err := st.Migrate(ctx); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
@@ -58,7 +72,7 @@ func main() {
 
 	gowa := gowaclient.New(cfg.GowaBaseURL, st)
 	stg := settings.New(st, cfg)
-	aiSvc := ai.New(st, cfg, stg)
+	aiSvc := ai.New(st, cfg, stg, cipher)
 	rtr := router.New(st, gowa, cfg, aiSvc, stg)
 
 	// --- Dashboard admin ---
@@ -68,6 +82,7 @@ func main() {
 	go broadcastWorker(ctx, st, gowa, cfg, stg)
 
 	// --- HTTP server ---
+	webhookSem := make(chan struct{}, 32) // maks 32 webhook diproses bersamaan
 	app := fiber.New(fiber.Config{
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -85,21 +100,28 @@ func main() {
 
 	app.Post("/webhook/gowa", func(c *fiber.Ctx) error {
 		body := c.Body()
-		// Verify HMAC signature (X-Hub-Signature-256) if a secret is configured.
-		if cfg.GowaWebhookSecret != "" && cfg.GowaWebhookSecret != "secret" {
-			sig := c.Get("X-Hub-Signature-256")
-			if sig == "" {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing webhook signature"})
-			}
-			mac := hmac.New(sha256.New, []byte(cfg.GowaWebhookSecret))
-			mac.Write(body)
-			expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-			if !hmac.Equal([]byte(sig), []byte(expected)) {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid webhook signature"})
-			}
+		// Verifikasi HMAC signature (X-Hub-Signature-256). Wajib selalu.
+		sig := c.Get("X-Hub-Signature-256")
+		if sig == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing webhook signature"})
 		}
-		// Acknowledge immediately; process asynchronously.
-		go rtr.HandleWebhook(context.Background(), body)
+		mac := hmac.New(sha256.New, []byte(cfg.GowaWebhookSecret))
+		mac.Write(body)
+		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(sig), []byte(expected)) {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid webhook signature"})
+		}
+		// Batasi pemrosesan bersamaan agar flood webhook tidak menumpuk
+		// goroutine/DB/API AI.
+		select {
+		case webhookSem <- struct{}{}:
+			go func() {
+				defer func() { <-webhookSem }()
+				rtr.HandleWebhook(context.Background(), body)
+			}()
+		default:
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "busy, coba lagi"})
+		}
 		return c.SendStatus(fiber.StatusOK)
 	})
 
