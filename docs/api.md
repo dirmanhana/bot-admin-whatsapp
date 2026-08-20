@@ -118,10 +118,10 @@ Daftar pesanan (maks 200). `status` opsional: `baru|diproses|dikirim|selesai|bat
 
 ### `POST /admin/orders/:id/status`
 
-Form-encoded: `status` (salah satu dari status di atas).
+Form-encoded: `status` (salah satu dari status di atas), `shipping_courier` (ekspedisi, opsional), `shipping_resi` (nomor resi, opsional — kosongkan untuk barang digital).
 
-- Ubah status di DB.
-- Kirim notifikasi WhatsApp ke customer (async) via `SendOrderStatusUpdate`.
+- Ubah status di DB + simpan ekspedisi/resi.
+- Kirim notifikasi WhatsApp ke customer (async) via `SendOrderStatusUpdate`; saat status `dikirim`, notifikasi menyertakan ekspedisi & resi bila ada.
 - `302 → /admin/orders?msg=...`
 
 ---

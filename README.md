@@ -22,6 +22,7 @@ Bot layanan pelanggan + dashboard admin untuk toko/UMKM berbasis **WhatsApp**. M
 14. [Keamanan](#keamanan)
 15. [Pemecahan Masalah](#pemecahan-masalah)
 16. [Lisensi & Kredit](#lisensi--kredit)
+17. [Changelog](#changelog)
 
 ---
 
@@ -36,7 +37,9 @@ Bot layanan pelanggan + dashboard admin untuk toko/UMKM berbasis **WhatsApp**. M
 | 📢 **Broadcast massal** | Kirim ke semua pelanggan aktif dengan jeda anti-ban |
 | 👥 **Manajemen pelanggan** | Blokir/buka blokir, lihat riwayat chat, catatan |
 | 📦 **Manajemen produk** | CRUD produk, stok, harga, aktif/nonaktif |
-| 🛒 **Manajemen pesanan** | Ubah status → notifikasi WhatsApp otomatis ke customer |
+| 🛒 **Manajemen pesanan** | Ubah status → notifikasi WhatsApp otomatis ke customer; input **ekspedisi & nomor resi** (opsional, kosong utk barang digital) |
+| 💳 **Pembayaran jelas** | Rekening & QRIS tampil di alur pesanan; pelanggan bisa balas *sudah transfer* → admin dinotifikasi |
+| 📦 **Cek status pesanan** | Pelanggan tanya *"pesanan saya mana?"* → bot tampilkan status + resi |
 | ⚡ **Balasan cepat** | Kata kunci → balasan otomatis |
 | 📱 **Akun WhatsApp** | Kelola akun gowa, login QR, set webhook |
 | 👥 **Multi-tenant & multi-user** | Setiap toko punya data terpisah + login sendiri (email/password); daftar di `/admin/register` |
@@ -213,23 +216,29 @@ Dari nomor `ADMIN_PHONE`, kirim perintah berawalan `/`:
 ## Alur Pesanan Pelanggan
 
 ```
-Pelanggan → "menu" / "start" / "katalog"
-   └─► Bot kirim katalog (produk aktif + harga + stok)
+Pelanggan → "menu" / "start" / "katalog" / "saya mau pesan <produk>"
+   └─► Bot kirim katalog / langsung pilih produk (nama produk + jumlah diekstrak)
 Pelanggan → nomor produk (mis. "1")
    └─► Bot minta jumlah
-Pelanggan → "2"
-   └─► Bot minta alamat
+Pelanggan → "2" / "10 pcs"
+   └─► Keranjang → "selesai" → pilih pengiriman (kirim/ambil)
 Pelanggan → alamat lengkap
-   └─► Bot tampilkan ringkasan + minta konfirmasi ("ya")
+   └─► Bot tampilkan ringkasan + PEMBAYARAN (rekening & QRIS) + minta konfirmasi ("ya")
 Pelanggan → "ya"
-   └─► Order dibuat (INV-YYYYMMDD-0001)
+   └─► Order dibuat (INV-YYYYMMDD-0001) + stok dikurangi
        ├─► Notifikasi ORDER BARU ke admin
-       └─► Konfirmasi ke pelanggan
+       └─► Konfirmasi ke pelanggan + petunjuk bayar
+Pelanggan → "sudah transfer" (setelah bayar)
+   └─► Bot catat & kirim notifikasi KONFIRMASI PEMBAYARAN ke admin
+Pelanggan → "pesanan saya mana?" / "sudah dikirim?"
+   └─► Bot tampilkan status order terbaru (+ ekspedisi & nomor resi bila ada)
 ```
 
+- Niat memesan dalam **bahasa alami** (mengandung `pesan`/`beli`/`order`) langsung memulai alur; nama produk & jumlah (`10 pcs`, `5x`) diekstrak otomatis.
 - Ketik **"batal"** kapan saja untuk membatalkan pesanan.
-- Stok dicek saat pilih produk & jumlah; stok `-1` = tidak terbatas.
+- Stok dicek saat order dibuat; stok `-1` = tidak terbatas. Stok tidak cukup → order gagal (rollback).
 - Status order: `baru → diproses → dikirim → selesai` (atau `batal`).
+- Saat status **dikirim**, admin bisa mengisi **ekspedisi & nomor resi** (opsional — kosong untuk barang digital); notifikasi ke customer menyertakan resi tersebut.
 - Setiap perubahan status dari dashboard mengirim notifikasi ke customer.
 
 ---
@@ -259,7 +268,7 @@ Semua memakai protokol OpenAI-compatible (`/chat/completions`):
    - mengirim prompt ke LLM dengan instruksi *"jawab berdasarkan data toko; jangan mengarang"*,
    - menjawab pelanggan. Jika AI mati → balasan default.
 
-> Alur pesanan (`menu`, nomor produk, alamat, `ya`) **tetap prioritas** — AI hanya menjawab pertanyaan yang tidak cocok dengan alur/balasan cepat.
+> Alur pesanan, cek status, dan konfirmasi pembayaran **tetap prioritas** — AI hanya menjawab pertanyaan yang tidak cocok dengan alur/balasan cepat.
 
 ---
 
@@ -281,7 +290,7 @@ Migrasi: `internal/store/migrations/`
 | `tenants` | Toko/pemilik (email, password bcrypt, status, `session_epoch`, `webhook_secret`) |
 | `customers` | Pelanggan (phone unik per tenant, jid, nama, catatan, status `active`/`blocked`) |
 | `products` | Produk (harga BIGINT rupiah, stok, `is_active`, path gambar) |
-| `orders` | Order (nomor unik `INV-...`, status, total, alamat) |
+| `orders` | Order (nomor unik `INV-...` per tenant, status, total, alamat, ekspedisi `shipping_courier` & nomor resi `shipping_resi` — opsional) |
 | `order_items` | Item per order (nama, harga, qty) |
 | `chat_messages` | Riwayat percakapan (arah in/out, tipe, body) |
 | `quick_replies` | Balasan cepat (keyword unik) |
@@ -315,7 +324,7 @@ Semua di bawah `/admin` — lihat [docs/api.md](docs/api.md) untuk detail lengka
 | POST | `/admin/broadcast`, `/admin/replies`, `/admin/replies/:id/toggle`, `/admin/replies/:id/delete` | Broadcast & balasan |
 | POST | `/admin/accounts`, `/admin/accounts/:id/active`, `/admin/accounts/:id/webhook`, GET `/admin/accounts/:id/qr` | Akun gowa |
 | POST | `/admin/ai`, `/admin/ai/test`, `/admin/ai/knowledge` (multipart), `/admin/ai/knowledge/:id/delete` | AI & knowledge base |
-| GET/POST | `/admin/settings` | Pengaturan toko (nama, alamat, nomor admin, jam operasional, pembayaran, ongkir, persona AI, password dashboard) |
+| GET/POST | `/admin/settings` | Pengaturan toko (nama, alamat, nomor admin, jam operasional, pembayaran **rekening & QRIS**, ongkir, persona AI, password dashboard) |
 | GET | `/admin/static/*` | Aset statis (CSS) |
 
 ---
@@ -379,3 +388,9 @@ Log berjalan di stdout/stderr (saat dijalankan manual) atau file (`nohup ... > a
 - Parser XLSX: [excelize](https://github.com/xuri/excelize) (BSD-3), PDF: [ledongthuc/pdf](https://github.com/ledongthuc/pdf) (MIT).
 - Framework web: [Fiber](https://gofiber.io) (MIT), driver DB: [pgx](https://github.com/jackc/pgx) (MIT).
 - Backend WhatsApp: [go-whatsapp-web-multidevice (gowa)](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
+
+---
+
+## Changelog
+
+Lihat [CHANGELOG.md](CHANGELOG.md).
