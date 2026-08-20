@@ -140,10 +140,38 @@ func TestResolveWebhookTenantPerTenantSecret(t *testing.T) {
 		t.Fatal("secret acak harus ditolak")
 	}
 
-	// Device tak dikenal + signature apa pun (bukan global) → ditolak.
+	// Device tak dikenal + signature apa pun (bukan global/tenant) → ditolak.
 	unknown := webhookBody("dev-x")
 	_, err = resolveWebhookTenant(unknown, sign("random", unknown), st, cfg)
 	if err == nil {
 		t.Fatal("device tak dikenal dengan secret non-global harus ditolak")
+	}
+}
+
+func TestResolveWebhookTenantBySignatureJID(t *testing.T) {
+	// gowa mengirim device_id berupa JID (bukan UUID device). Identitas tenant
+	// harus dikenali dari signature-nya, bukan dari device_id.
+	st := testStore(t)
+	secret1, _ := st.TenantWebhookSecret(context.Background(), 1)
+	secret2, _ := st.TenantWebhookSecret(context.Background(), 2)
+	cfg := &config.Config{GowaWebhookSecret: "global-secret"}
+
+	// Payload ala gowa: device_id = JID nomor WA, mis. 628977700129@s.whatsapp.net.
+	body := webhookBody("628977700129@s.whatsapp.net")
+
+	tid, err := resolveWebhookTenant(body, sign(secret2, body), st, cfg)
+	if err != nil || tid != 2 {
+		t.Fatalf("signature tenant2 (device JID): tid=%d err=%v", tid, err)
+	}
+	tid, err = resolveWebhookTenant(body, sign(secret1, body), st, cfg)
+	if err != nil || tid != 1 {
+		t.Fatalf("signature tenant1 (device JID): tid=%d err=%v", tid, err)
+	}
+
+	// Secret global + satu-tenant legacy: dua tenant aktif → device tak dikenal
+	// harus ditolak (tidak jatuh ke tenant acak).
+	_, err = resolveWebhookTenant(body, sign("global-secret", body), st, cfg)
+	if err == nil {
+		t.Fatal("global secret + multi-tenant + device tak dikenal harus ditolak")
 	}
 }

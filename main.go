@@ -170,43 +170,50 @@ func verifyHMAC(secret string, body []byte, sig string) bool {
 }
 
 // resolveWebhookTenant memvalidasi signature webhook lalu menentukan tenant
-// pemilik pesan. Urutan:
-//  1. Device_id payload dicocokkan ke tenant (wa_accounts.device_id) — jika
-//     dikenal, signature diverifikasi terhadap secret tenant tsb.
-//  2. Secret global (.env) — mode lama/kompatibel; setelah lolos, tenant
-//     tetap ditentukan dari device_id (fail-closed: device tak dikenal
-//     DITOLAK, bukan jatuh ke tenant 1).
+// pemilik pesan.
 //
-// Signature tidak pernah dipercaya sebelum diverifikasi, sehingga
-// device_id palsu tidak bisa membajak tenant lain. Satu device gowa hanya
-// boleh milik satu tenant (dipastikan saat simpan akun WA).
+// gowa menandatangani webhook dengan secret khusus device (diresolusi lewat
+// JID nomor WhatsApp yang terhubung, fallback ke secret global gowa). Karena
+// payload device_id adalah JID (bukan UUID device), identitas tenant tidak
+// bisa diandalkan dari device_id — jadi signature sendiri yang menjadi
+// identifikator: secret tiap tenant aktif diuji, dan HMAC yang cocok unik
+// menunjuk ke tenant pemiliknya.
+//
+// Urutan:
+//  1. Secret khusus tiap tenant aktif — cocok => tenant itu.
+//  2. Secret global (.env) — mode lama; setelah lolos, tenant ditentukan dari
+//     device_id (bila dikenal) atau tenant satu-satunya (instalasi lama
+//     satu-tenant). Device tak dikenal di multi-tenant DITOLAK (fail-closed).
 func resolveWebhookTenant(body []byte, sig string, st *store.Store, cfg *config.Config) (int64, error) {
 	var wp router.WebhookPayload
 	if err := json.Unmarshal(body, &wp); err != nil {
 		return 0, errors.New("payload tidak valid")
 	}
 
-	// 1) Secret khusus tenant (alur utama multi-tenant).
-	if wp.DeviceID != "" {
-		tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID)
-		if err != nil {
-			return 0, errors.New("gagal membaca device")
+	tenants, err := st.ListTenants(context.Background())
+	if err != nil {
+		return 0, errors.New("gagal membaca daftar tenant")
+	}
+	var active []store.Tenant
+	for _, t := range tenants {
+		if t.Status != "active" {
+			continue
 		}
-		if tid > 0 {
-			secret, err := st.TenantWebhookSecret(context.Background(), tid)
-			if err == nil && verifyHMAC(secret, body, sig) {
-				return tid, nil
-			}
+		active = append(active, t)
+		if verifyHMAC(t.WebhookSecret, body, sig) {
+			return t.ID, nil
 		}
 	}
 
-	// 2) Secret global (legacy). Tetap resolve device -> tenant; device tak
-	//    dikenal ditolak agar pesan tidak jatuh ke tenant yang salah.
+	// Secret global (legacy).
 	if verifyHMAC(cfg.GowaWebhookSecret, body, sig) {
 		if wp.DeviceID != "" {
 			if tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID); err == nil && tid > 0 {
 				return tid, nil
 			}
+		}
+		if len(active) == 1 {
+			return active[0].ID, nil // instalasi lama satu-tenant
 		}
 		return 0, errors.New("device tidak dikenal")
 	}

@@ -55,9 +55,9 @@ func (s *Store) CreateTenant(ctx context.Context, email, passwordHash string) (i
 func (s *Store) GetTenantByEmail(ctx context.Context, email string) (*Tenant, error) {
 	var t Tenant
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, email, password_hash, status, session_epoch, created_at, updated_at
+		SELECT id, email, password_hash, status, session_epoch, webhook_secret, created_at, updated_at
 		FROM tenants WHERE email = $1`), email).
-		Scan(&t.ID, &t.Email, &t.PasswordHash, &t.Status, &t.SessionEpoch, &t.CreatedAt, &t.UpdatedAt)
+		Scan(&t.ID, &t.Email, &t.PasswordHash, &t.Status, &t.SessionEpoch, &t.WebhookSecret, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -70,9 +70,9 @@ func (s *Store) GetTenantByEmail(ctx context.Context, email string) (*Tenant, er
 func (s *Store) GetTenant(ctx context.Context, id int64) (*Tenant, error) {
 	var t Tenant
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, email, password_hash, status, session_epoch, created_at, updated_at
+		SELECT id, email, password_hash, status, session_epoch, webhook_secret, created_at, updated_at
 		FROM tenants WHERE id = $1`), id).
-		Scan(&t.ID, &t.Email, &t.PasswordHash, &t.Status, &t.SessionEpoch, &t.CreatedAt, &t.UpdatedAt)
+		Scan(&t.ID, &t.Email, &t.PasswordHash, &t.Status, &t.SessionEpoch, &t.WebhookSecret, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -83,7 +83,7 @@ func (s *Store) GetTenant(ctx context.Context, id int64) (*Tenant, error) {
 }
 
 func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
-	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, email, password_hash, status, session_epoch, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, email, password_hash, status, session_epoch, webhook_secret, created_at, updated_at
 		FROM tenants ORDER BY id ASC`))
 	if err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
 	var out []Tenant
 	for rows.Next() {
 		var t Tenant
-		if err := rows.Scan(&t.ID, &t.Email, &t.PasswordHash, &t.Status, &t.SessionEpoch, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Email, &t.PasswordHash, &t.Status, &t.SessionEpoch, &t.WebhookSecret, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
