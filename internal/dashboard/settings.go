@@ -33,8 +33,16 @@ func (s *Server) actionSettingsSave(c *fiber.Ctx) error {
 		quota = 0
 	}
 	maxTokens, _ := strconv.Atoi(strings.TrimSpace(c.FormValue("ai_max_tokens")))
-	if maxTokens < 0 {
-		maxTokens = 0
+	if maxTokens < 1 {
+		maxTokens = 600
+	}
+	maxProducts, _ := strconv.Atoi(strings.TrimSpace(c.FormValue("ai_max_products")))
+	if maxProducts < 1 {
+		maxProducts = 15
+	}
+	maxHistory, _ := strconv.Atoi(strings.TrimSpace(c.FormValue("ai_max_history")))
+	if maxHistory < 1 {
+		maxHistory = 15
 	}
 	st := settings.Settings{
 		StoreName:      strings.TrimSpace(c.FormValue("store_name")),
@@ -47,6 +55,8 @@ func (s *Server) actionSettingsSave(c *fiber.Ctx) error {
 		DeliveryFee:    fee,
 		AIDailyQuota:   quota,
 		AIMaxTokens:    maxTokens,
+		AIMaxProducts:  maxProducts,
+		AIMaxHistory:   maxHistory,
 	}
 	if st.StoreName == "" {
 		return redirect(c, "/admin/settings", "Nama toko wajib diisi.", true)

@@ -191,7 +191,11 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 		r.reply(ctx, c, "Maaf, pertanyaan gratis hari ini sudah habis. Hubungi admin untuk bantuan lebih lanjut.")
 		return
 	}
-		history, err := r.store.ListChatMessages(ctx, c.ID, 15)
+		historyLimit := 15
+		if st := r.storeSettings(ctx); st.AIMaxHistory > 0 {
+			historyLimit = st.AIMaxHistory
+		}
+		history, err := r.store.ListChatMessages(ctx, c.ID, historyLimit)
 		if err != nil {
 			history = nil
 		}

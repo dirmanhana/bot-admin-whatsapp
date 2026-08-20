@@ -5,7 +5,6 @@
   <div class="mb-3 flex items-center gap-2">
     {{icon "settings"}}<h2 class="font-heading text-sm font-semibold tracking-tight">Pengaturan Toko</h2>
   </div>
-  <p class="mb-3 text-sm text-muted-foreground">Nama toko, alamat, nomor kontak admin, jam operasional, metode pembayaran, dan persona AI dipakai di pesan bot (katalog, konfirmasi pesanan, jawaban AI) dan notifikasi order baru. Nilai di sini menang atas <code>.env</code>.</p>
   <form method="post" action="/admin/settings" class="flex max-w-2xl flex-col gap-1">
     <input type="hidden" name="_csrf" value="{{$.CSRF}}">
     <div class="flex flex-col gap-1">
@@ -45,7 +44,6 @@
     <div class="mt-5 mb-1 flex items-center gap-2">
       {{icon "sparkles"}}<h3 class="font-heading text-sm font-semibold tracking-tight">Persona AI</h3>
     </div>
-    <p class="mb-3 text-sm text-muted-foreground">Dipakai bot saat menjawab pertanyaan pelanggan.</p>
     <div class="grid gap-3 grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-foreground">Nama AI (opsional)</label>
@@ -62,7 +60,6 @@
     <div class="mt-5 mb-1 flex items-center gap-2">
       {{icon "zap"}}<h3 class="font-heading text-sm font-semibold tracking-tight">Batasi Biaya AI</h3>
     </div>
-    <p class="mb-3 text-sm text-muted-foreground">Kendalikan pemakaian API AI agar biaya terkendali. Nilai di sini menang atas <code>.env</code>.</p>
     <div class="grid gap-3 grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-foreground">Kuota per Pelanggan per Hari (0 = tanpa batas)</label>
@@ -74,12 +71,21 @@
         <input name="ai_max_tokens" value="{{$st.AIMaxTokens}}" type="number" min="1"
           class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
       </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Maks. Produk di Konteks AI</label>
+        <input name="ai_max_products" value="{{$st.AIMaxProducts}}" type="number" min="1"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Maks. Pesan Riwayat Percakapan</label>
+        <input name="ai_max_history" value="{{$st.AIMaxHistory}}" type="number" min="1"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+      </div>
     </div>
 
     <div class="mt-5 mb-1 flex items-center gap-2">
       {{icon "lock"}}<h3 class="font-heading text-sm font-semibold tracking-tight">Keamanan</h3>
     </div>
-    <p class="mb-3 text-sm text-muted-foreground">Ubah kata sandi dashboard. Kata sandi disimpan terenkripsi di database dan menang atas <code>DASHBOARD_PASSWORD</code> di <code>.env</code>.</p>
     <div class="grid gap-3 grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-foreground">Password Saat Ini</label>

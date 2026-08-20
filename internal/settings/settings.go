@@ -22,6 +22,8 @@ const (
 	KeyDeliveryFee    = "delivery_fee"
 	KeyAIDailyQuota   = "ai_daily_quota"
 	KeyAIMaxTokens    = "ai_max_tokens"
+	KeyAIMaxProducts  = "ai_max_products"
+	KeyAIMaxHistory   = "ai_max_history"
 	KeyDashPassword   = "dashboard_password_hash"
 	KeyDashSessionEpoch = "dashboard_session_epoch"
 )
@@ -38,6 +40,8 @@ type Settings struct {
 	DeliveryFee    int64
 	AIDailyQuota   int // 0 = tanpa batas
 	AIMaxTokens    int
+	AIMaxProducts  int // maks produk di konteks AI
+	AIMaxHistory   int // maks pesan riwayat percakapan
 }
 
 // Service menyediakan pengaturan toko dengan cache singkat agar tidak
@@ -78,6 +82,8 @@ func (s *Service) Get(ctx context.Context) (*Settings, error) {
 		PaymentMethods: strings.TrimSpace(kv[KeyPaymentMethods]),
 		AIDailyQuota:   s.cfg.AIDailyQuota,
 		AIMaxTokens:    s.cfg.AIMaxTokens,
+		AIMaxProducts:  s.cfg.AIMaxProducts,
+		AIMaxHistory:   s.cfg.AIMaxHistory,
 	}
 	if v := strings.TrimSpace(kv[KeyDeliveryFee]); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
@@ -92,6 +98,16 @@ func (s *Service) Get(ctx context.Context) (*Settings, error) {
 	if v := strings.TrimSpace(kv[KeyAIMaxTokens]); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			st.AIMaxTokens = n
+		}
+	}
+	if v := strings.TrimSpace(kv[KeyAIMaxProducts]); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			st.AIMaxProducts = n
+		}
+	}
+	if v := strings.TrimSpace(kv[KeyAIMaxHistory]); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			st.AIMaxHistory = n
 		}
 	}
 	s.cached = st
@@ -112,6 +128,8 @@ func (s *Service) Save(ctx context.Context, st Settings) error {
 		KeyDeliveryFee:    strconv.FormatInt(st.DeliveryFee, 10),
 		KeyAIDailyQuota:   strconv.Itoa(st.AIDailyQuota),
 		KeyAIMaxTokens:    strconv.Itoa(st.AIMaxTokens),
+		KeyAIMaxProducts:  strconv.Itoa(st.AIMaxProducts),
+		KeyAIMaxHistory:   strconv.Itoa(st.AIMaxHistory),
 	}
 	for k, v := range vals {
 		if err := s.store.SetSetting(ctx, k, v); err != nil {

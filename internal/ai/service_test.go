@@ -39,7 +39,7 @@ func TestProductContextRelevantOnly(t *testing.T) {
 		{Name: "Teh Hijau", Description: "daun teh pilihan", Price: 30000, Stock: 0},
 		{Name: "Susu UHT", Description: "susu sapi murni", Price: 20000, Stock: 5},
 	}
-	ctx := productContext(products, "berapa harga teh?")
+	ctx := productContext(products, "berapa harga teh?", 15)
 	if !strings.Contains(ctx, "Teh Hijau") {
 		t.Errorf("context harus berisi produk relevan: %s", ctx)
 	}
@@ -53,15 +53,26 @@ func TestProductContextFallback(t *testing.T) {
 		{Name: "Kopi Arabika", Price: 50000, Stock: 10},
 		{Name: "Teh Hijau", Price: 30000, Stock: 5},
 	}
-	ctx := productContext(products, "zzz kata tak dikenal")
+	ctx := productContext(products, "zzz kata tak dikenal", 15)
 	if !strings.Contains(ctx, "Kopi Arabika") {
 		t.Errorf("tanpa kecocokan harus ada produk fallback: %s", ctx)
 	}
 }
 
 func TestProductContextEmpty(t *testing.T) {
-	if ctx := productContext(nil, "halo"); ctx != "" {
+	if ctx := productContext(nil, "halo", 15); ctx != "" {
 		t.Errorf("productContext(nil) = %q, want empty", ctx)
+	}
+}
+
+func TestProductContextMaxShown(t *testing.T) {
+	products := []store.Product{
+		{Name: "Produk Satu", Price: 10000}, {Name: "Produk Dua", Price: 20000},
+		{Name: "Produk Tiga", Price: 30000}, {Name: "Produk Empat", Price: 40000},
+	}
+	ctx := productContext(products, "produk", 2)
+	if strings.Count(ctx, "- Produk") != 2 {
+		t.Errorf("maxShown=2 harus membatasi: %s", ctx)
 	}
 }
 

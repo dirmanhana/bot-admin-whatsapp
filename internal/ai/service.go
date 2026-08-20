@@ -192,7 +192,13 @@ func (s *Service) Answer(ctx context.Context, question string, history []store.C
 	if err != nil {
 		log.Printf("ai: list products: %v", err)
 	}
-	prodContext := productContext(products, retrievalQuery)
+	maxProducts := s.cfg.AIMaxProducts
+	if s.stg != nil {
+		if st, err := s.stg.Get(ctx); err == nil && st.AIMaxProducts > 0 {
+			maxProducts = st.AIMaxProducts
+		}
+	}
+	prodContext := productContext(products, retrievalQuery, maxProducts)
 
 	var contextParts []string
 	if prodContext != "" {
@@ -347,9 +353,12 @@ func firstNonEmpty(vals ...string) string {
 // teks konteks untuk AI. Hanya produk yang cocok dengan kata kunci pertanyaan
 // yang disertakan (hemat token); bila tak ada yang cocok, sejumlah kecil
 // produk ditampilkan agar AI tetap punya gambaran toko.
-func productContext(products []store.Product, query string) string {
+func productContext(products []store.Product, query string, maxShown int) string {
 	if len(products) == 0 {
 		return ""
+	}
+	if maxShown < 1 {
+		maxShown = 5
 	}
 	words := queryWords(query)
 	type scored struct {
@@ -371,7 +380,7 @@ func productContext(products []store.Product, query string) string {
 		return scoredList[i].score > scoredList[j].score
 	})
 
-	// Hanya produk relevan (score > 0), maksimal 15.
+	// Hanya produk relevan (score > 0), maksimal maxShown.
 	relevant := 0
 	for _, s := range scoredList {
 		if s.score > 0 {
@@ -380,9 +389,8 @@ func productContext(products []store.Product, query string) string {
 	}
 	show := relevant
 	if show == 0 {
-		show = 5
+		show = 5 // fallback: tetap kenalkan katalog walau tak ada yang cocok
 	}
-	const maxShown = 15
 	if show > maxShown {
 		show = maxShown
 	}

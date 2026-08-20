@@ -32,6 +32,8 @@ type Config struct {
 	LogRedact           bool
 	AIDailyQuota        int
 	AIMaxTokens         int
+	AIMaxProducts       int
+	AIMaxHistory        int
 	UploadDir           string
 }
 
@@ -60,6 +62,8 @@ func Load() (*Config, error) {
 		LogRedact:           getEnv("LOG_REDACT", "true") != "false",
 		AIDailyQuota:        getEnvInt("AI_DAILY_QUOTA", 20),
 		AIMaxTokens:         getEnvInt("AI_MAX_TOKENS", 600),
+		AIMaxProducts:       getEnvInt("AI_MAX_PRODUCTS", 15),
+		AIMaxHistory:        getEnvInt("AI_MAX_HISTORY", 15),
 		UploadDir:           getEnv("UPLOAD_DIR", "data/products"),
 	}
 
