@@ -5,6 +5,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -15,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dirman/bot-admin-whatsapp/internal/ai"
 	"github.com/dirman/bot-admin-whatsapp/internal/config"
@@ -64,6 +67,19 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
+	// Tenant 1 = akun admin lama (DASHBOARD_USER/DASHBOARD_PASSWORD).
+	// Semua data yang sudah ada otomatis milik tenant ini.
+	if cfg.DashboardUser == "" || cfg.DashboardPassword == "" {
+		log.Fatalf("DASHBOARD_USER dan DASHBOARD_PASSWORD wajib diisi (dipakai untuk tenant pertama).")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(cfg.DashboardPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatalf("hash password tenant: %v", err)
+	}
+	if err := st.SeedTenant1(ctx, cfg.DashboardUser, string(hash)); err != nil {
+		log.Fatalf("seed tenant 1: %v", err)
+	}
+
 	if cfg.UploadDir != "" {
 		if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
 			log.Printf("warn: buat direktori upload: %v", err)
@@ -101,14 +117,16 @@ func main() {
 	app.Post("/webhook/gowa", func(c *fiber.Ctx) error {
 		body := c.Body()
 		// Verifikasi HMAC signature (X-Hub-Signature-256). Wajib selalu.
+		// Secret global (.env) diterima untuk kompatibilitas; setiap tenant
+		// juga punya secret sendiri (tenants.webhook_secret) yang dipasang
+		// ke device gowa lewat dashboard.
 		sig := c.Get("X-Hub-Signature-256")
 		if sig == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing webhook signature"})
 		}
-		mac := hmac.New(sha256.New, []byte(cfg.GowaWebhookSecret))
-		mac.Write(body)
-		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-		if !hmac.Equal([]byte(sig), []byte(expected)) {
+		tid, err := resolveWebhookTenant(body, sig, st, cfg)
+		if err != nil {
+			log.Printf("webhook: ditolak: %v", err)
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid webhook signature"})
 		}
 		// Batasi pemrosesan bersamaan agar flood webhook tidak menumpuk
@@ -117,7 +135,8 @@ func main() {
 		case webhookSem <- struct{}{}:
 			go func() {
 				defer func() { <-webhookSem }()
-				rtr.HandleWebhook(context.Background(), body)
+				wctx := store.WithTenant(context.Background(), tid)
+				rtr.HandleWebhook(wctx, body)
 			}()
 		default:
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "busy, coba lagi"})
@@ -143,6 +162,53 @@ func main() {
 	log.Println("bye.")
 }
 
+// verifyHMAC membandingkan signature X-Hub-Signature-256 dengan secret.
+func verifyHMAC(secret string, body []byte, sig string) bool {
+	if secret == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(sig), []byte(expected))
+}
+
+// resolveWebhookTenant memvalidasi signature webhook lalu menentukan tenant
+// pemilik pesan. Urutan:
+//  1. Secret global (.env) — mode lama/kompatibel; tenant ditentukan dari
+//     device_id payload (fallback tenant 1).
+//  2. Secret per tenant — device_id payload dicocokkan ke tenant, lalu
+//     signature diverifikasi dengan secret tenant tsb.
+//
+// Signature tidak pernah dipercaya sebelum diverifikasi, sehingga
+// device_id palsu tidak bisa membajak tenant lain.
+func resolveWebhookTenant(body []byte, sig string, st *store.Store, cfg *config.Config) (int64, error) {
+	var wp router.WebhookPayload
+	if err := json.Unmarshal(body, &wp); err != nil {
+		return 0, errors.New("payload tidak valid")
+	}
+
+	if verifyHMAC(cfg.GowaWebhookSecret, body, sig) {
+		if tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID); err == nil && tid > 0 {
+			return tid, nil
+		}
+		return 1, nil // legacy: semua pesan tanpa device dikenal milik tenant 1
+	}
+
+	if wp.DeviceID == "" {
+		return 0, errors.New("signature tidak cocok dan tanpa device_id")
+	}
+	tid, err := st.TenantIDByDeviceID(context.Background(), wp.DeviceID)
+	if err != nil || tid <= 0 {
+		return 0, errors.New("device tidak dikenal")
+	}
+	secret, err := st.TenantWebhookSecret(context.Background(), tid)
+	if err != nil || !verifyHMAC(secret, body, sig) {
+		return 0, errors.New("signature tenant tidak cocok")
+	}
+	return tid, nil
+}
+
 // broadcastWorker periodically picks up pending broadcasts and sends them
 // to the target customers with a delay between each message.
 func broadcastWorker(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config, stg *settings.Service) {
@@ -154,8 +220,23 @@ func broadcastWorker(ctx context.Context, st *store.Store, gowa *gowaclient.Clie
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runPendingBroadcasts(ctx, st, gowa, cfg, stg)
+			runAllTenantBroadcasts(ctx, st, gowa, cfg, stg)
 		}
+	}
+}
+
+// runAllTenantBroadcasts menjalankan broadcast untuk semua tenant aktif.
+// Broadcast tiap toko diproses dengan konteks tenant-nya sendiri sehingga
+// pelanggan/akun gowa yang dipakai benar.
+func runAllTenantBroadcasts(ctx context.Context, st *store.Store, gowa *gowaclient.Client, cfg *config.Config, stg *settings.Service) {
+	ids, err := st.ListTenantIDs(ctx)
+	if err != nil {
+		log.Printf("broadcast: list tenant: %v", err)
+		return
+	}
+	for _, tid := range ids {
+		tctx := store.WithTenant(ctx, tid)
+		runPendingBroadcasts(tctx, st, gowa, cfg, stg)
 	}
 }
 

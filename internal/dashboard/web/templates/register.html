@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="id" class="min-h-svh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daftar · {{.Store}}</title>
+  <link rel="stylesheet" href="/admin/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='oklch(55% .09 225)'/><text x='16' y='22' font-size='16' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>B</text></svg>">
+</head>
+<body class="min-h-svh bg-background font-sans antialiased">
+  <div class="flex min-h-svh items-center justify-center p-4">
+    <div class="w-full max-w-md rounded-xl bg-card p-6 shadow-xs ring-1 ring-foreground/10">
+      <div class="flex items-center gap-2">
+        <div class="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">{{icon "plus"}}</div>
+        <div>
+          <div class="font-heading text-base font-semibold tracking-tight">Daftar Toko Baru</div>
+          <div class="text-sm text-muted-foreground">Buat akun dashboard untuk toko Anda</div>
+        </div>
+      </div>
+
+      <p class="mt-4 text-sm text-muted-foreground">
+        Setiap toko mendapat data terpisah (produk, pelanggan, pesanan, AI) dan login sendiri.
+        Setelah mendaftar, hubungkan nomor WhatsApp lewat menu <strong>Akun WA</strong>.
+      </p>
+
+      {{if .Err}}<div class="flash flash-err mt-4">{{.Err}}</div>{{end}}
+
+      <form method="post" action="/admin/register" class="mt-4 flex flex-col gap-1">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <label class="text-sm text-muted-foreground" for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required autofocus
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm"
+          placeholder="nama@tokomu.id">
+        <label class="mt-2 text-sm text-muted-foreground" for="store_name">Nama Toko <span class="text-muted-foreground/60">(opsional)</span></label>
+        <input id="store_name" name="store_name" autocomplete="organization"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm"
+          placeholder="Toko Saya">
+        <label class="mt-2 text-sm text-muted-foreground" for="pass">Password <span class="text-muted-foreground/60">(min. 8 karakter)</span></label>
+        <input id="pass" name="password" type="password" autocomplete="new-password" required
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        <label class="mt-2 text-sm text-muted-foreground" for="pass2">Ulangi Password</label>
+        <input id="pass2" name="password_confirm" type="password" autocomplete="new-password" required
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        <button type="submit"
+          class="mt-3 inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/80 h-8 gap-1.5 px-2.5">
+          Daftar
+        </button>
+      </form>
+
+      <div class="mt-4 text-center text-sm text-muted-foreground">
+        Sudah punya akun? <a href="/admin/login" class="text-primary hover:underline">Masuk</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

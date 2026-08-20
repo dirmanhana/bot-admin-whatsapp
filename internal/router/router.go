@@ -207,7 +207,7 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 		}
 	}
 
-	r.reply(ctx, c, r.defaultReply())
+	r.reply(ctx, c, r.defaultReply(ctx))
 }
 
 func (r *Router) handleOrderSession(ctx context.Context, c *store.Customer, session *store.OrderSession, body, normalized string) {
@@ -532,8 +532,8 @@ func (r *Router) sendCatalog(ctx context.Context, c *store.Customer) {
 	})
 }
 
-func (r *Router) defaultReply() string {
-	st, err := r.settings.Get(context.Background())
+func (r *Router) defaultReply(ctx context.Context) string {
+	st, err := r.settings.Get(ctx)
 	storeName := r.cfg.StoreName
 	if err == nil && st != nil && st.StoreName != "" {
 		storeName = st.StoreName

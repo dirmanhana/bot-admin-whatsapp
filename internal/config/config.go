@@ -30,6 +30,7 @@ type Config struct {
 	LoginMaxAttempts    int
 	LoginLockoutMinutes int
 	LogRedact           bool
+	AllowRegistration   bool
 	AIDailyQuota        int
 	AIMaxTokens         int
 	AIMaxProducts       int
@@ -60,6 +61,7 @@ func Load() (*Config, error) {
 		LoginMaxAttempts:    getEnvInt("LOGIN_MAX_ATTEMPTS", 5),
 		LoginLockoutMinutes: getEnvInt("LOGIN_LOCKOUT_MINUTES", 15),
 		LogRedact:           getEnv("LOG_REDACT", "true") != "false",
+		AllowRegistration:   getEnv("ALLOW_REGISTRATION", "true") != "false",
 		AIDailyQuota:        getEnvInt("AI_DAILY_QUOTA", 20),
 		AIMaxTokens:         getEnvInt("AI_MAX_TOKENS", 600),
 		AIMaxProducts:       getEnvInt("AI_MAX_PRODUCTS", 15),

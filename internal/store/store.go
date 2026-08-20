@@ -55,6 +55,15 @@ func (s *Store) dec(v string) string {
 	return out
 }
 
+// tid mengambil ID tenant dari context; 0/belum di-set dianggap tenant 1
+// (data lama milik tenant 1) agar request pra-login tidak kehilangan data.
+func (s *Store) tid(ctx context.Context) int64 {
+	if t := TenantID(ctx); t > 0 {
+		return t
+	}
+	return 1
+}
+
 // q mengembalikan SQL sesuai dialect. SQLite tidak mengenal placeholder $N,
 // jadi diubah menjadi ?. Postgres (pgx) memakai $N secara native.
 func (s *Store) q(sql string) string {
@@ -93,15 +102,16 @@ func nullableTimePtr(nt sql.NullTime) *time.Time {
 // ---------- Customers ----------
 
 func (s *Store) GetOrCreateCustomer(ctx context.Context, phone, jid, name string) (*Customer, error) {
+	tid := s.tid(ctx)
 	var c Customer
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO customers (phone, jid, name)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (phone) DO UPDATE SET jid = EXCLUDED.jid,
+		INSERT INTO customers (tenant_id, phone, jid, name)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (tenant_id, phone) DO UPDATE SET jid = EXCLUDED.jid,
 			name = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END,
-			updated_at = $4
+			updated_at = $5
 		RETURNING id, phone, jid, name, notes, status, created_at, updated_at`),
-		phone, jid, name, time.Now()).Scan(&c.ID, &c.Phone, &c.JID, &c.Name, &c.Notes, &c.Status, &c.CreatedAt, &c.UpdatedAt)
+		tid, phone, jid, name, time.Now()).Scan(&c.ID, &c.Phone, &c.JID, &c.Name, &c.Notes, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +121,7 @@ func (s *Store) GetOrCreateCustomer(ctx context.Context, phone, jid, name string
 func (s *Store) GetCustomerByPhone(ctx context.Context, phone string) (*Customer, error) {
 	var c Customer
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, phone, jid, name, notes, status, created_at, updated_at FROM customers WHERE phone = $1`), phone).
+		SELECT id, phone, jid, name, notes, status, created_at, updated_at FROM customers WHERE phone = $1 AND tenant_id = $2`), phone, s.tid(ctx)).
 		Scan(&c.ID, &c.Phone, &c.JID, &c.Name, &c.Notes, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -125,7 +135,7 @@ func (s *Store) GetCustomerByPhone(ctx context.Context, phone string) (*Customer
 func (s *Store) GetCustomer(ctx context.Context, id int64) (*Customer, error) {
 	var c Customer
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, phone, jid, name, notes, status, created_at, updated_at FROM customers WHERE id = $1`), id).
+		SELECT id, phone, jid, name, notes, status, created_at, updated_at FROM customers WHERE id = $1 AND tenant_id = $2`), id, s.tid(ctx)).
 		Scan(&c.ID, &c.Phone, &c.JID, &c.Name, &c.Notes, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -138,11 +148,13 @@ func (s *Store) GetCustomer(ctx context.Context, id int64) (*Customer, error) {
 
 func (s *Store) ListCustomers(ctx context.Context, search string) ([]Customer, error) {
 	q := `SELECT id, phone, jid, name, notes, status, created_at, updated_at FROM customers`
-	args := []any{}
+	args := []any{s.tid(ctx)}
 	if search != "" {
 		// LIKE (bukan ILIKE) agar jalan di Postgres maupun SQLite.
-		q += ` WHERE LOWER(phone) LIKE LOWER($1) OR LOWER(name) LIKE LOWER($1) OR LOWER(notes) LIKE LOWER($1)`
-		args = append(args, "%"+search+"%")
+		q += ` WHERE tenant_id = $1 AND (LOWER(phone) LIKE LOWER($2) OR LOWER(name) LIKE LOWER($3) OR LOWER(notes) LIKE LOWER($4))`
+		args = append(args, "%"+search+"%", "%"+search+"%", "%"+search+"%")
+	} else {
+		q += ` WHERE tenant_id = $1`
 	}
 	q += ` ORDER BY created_at DESC LIMIT 500`
 	rows, err := s.db.QueryContext(ctx, s.q(q), args...)
@@ -162,12 +174,12 @@ func (s *Store) ListCustomers(ctx context.Context, search string) ([]Customer, e
 }
 
 func (s *Store) UpdateCustomerNotes(ctx context.Context, id int64, notes string) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE customers SET notes = $1, updated_at = $2 WHERE id = $3`), notes, time.Now(), id)
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE customers SET notes = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4`), notes, time.Now(), id, s.tid(ctx))
 	return err
 }
 
 func (s *Store) SetCustomerStatus(ctx context.Context, id int64, status string) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE customers SET status = $1, updated_at = $2 WHERE id = $3`), status, time.Now(), id)
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE customers SET status = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4`), status, time.Now(), id, s.tid(ctx))
 	return err
 }
 
@@ -175,11 +187,14 @@ func (s *Store) SetCustomerStatus(ctx context.Context, id int64, status string) 
 
 func (s *Store) ListProducts(ctx context.Context, activeOnly bool) ([]Product, error) {
 	q := `SELECT id, name, description, price, image_path, stock, is_active, purchase_link, created_at, updated_at FROM products`
+	args := []any{s.tid(ctx)}
 	if activeOnly {
-		q += ` WHERE is_active = true`
+		q += ` WHERE tenant_id = $1 AND is_active = true`
+	} else {
+		q += ` WHERE tenant_id = $1`
 	}
 	q += ` ORDER BY id ASC`
-	rows, err := s.db.QueryContext(ctx, s.q(q))
+	rows, err := s.db.QueryContext(ctx, s.q(q), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +214,7 @@ func (s *Store) ListProducts(ctx context.Context, activeOnly bool) ([]Product, e
 func (s *Store) GetProduct(ctx context.Context, id int64) (*Product, error) {
 	var p Product
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT id, name, description, price, image_path, stock, is_active, purchase_link, created_at, updated_at FROM products WHERE id = $1`), id).
+		SELECT id, name, description, price, image_path, stock, is_active, purchase_link, created_at, updated_at FROM products WHERE id = $1 AND tenant_id = $2`), id, s.tid(ctx)).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.ImagePath, &p.Stock, &p.IsActive,
 			&p.PurchaseLink, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -214,9 +229,9 @@ func (s *Store) GetProduct(ctx context.Context, id int64) (*Product, error) {
 func (s *Store) CreateProduct(ctx context.Context, p *Product) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO products (name, description, price, image_path, stock, is_active, purchase_link)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`),
-		p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive, p.PurchaseLink).Scan(&id)
+		INSERT INTO products (tenant_id, name, description, price, image_path, stock, is_active, purchase_link)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`),
+		s.tid(ctx), p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive, p.PurchaseLink).Scan(&id)
 	return id, err
 }
 
@@ -224,14 +239,14 @@ func (s *Store) UpdateProduct(ctx context.Context, p *Product) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
 		UPDATE products SET name=$1, description=$2, price=$3, image_path=$4, stock=$5, is_active=$6,
 			purchase_link=$7, updated_at=$8
-		WHERE id=$9`),
+		WHERE id=$9 AND tenant_id=$10`),
 		p.Name, p.Description, p.Price, p.ImagePath, p.Stock, p.IsActive,
-		p.PurchaseLink, time.Now(), p.ID)
+		p.PurchaseLink, time.Now(), p.ID, s.tid(ctx))
 	return err
 }
 
 func (s *Store) DeleteProduct(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM products WHERE id = $1`), id)
+	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM products WHERE id = $1 AND tenant_id = $2`), id, s.tid(ctx))
 	return err
 }
 
@@ -244,13 +259,13 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address, deli
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Nomor urut order: counter tabel order_seq (kompatibel PG & SQLite,
-	// menggantikan nextval sequence Postgres).
+	// Nomor urut order: counter tabel order_seq per tenant (kompatibel PG &
+	// SQLite, menggantikan nextval sequence Postgres).
 	var seq int64
 	if err := tx.QueryRowContext(ctx, s.q(`
-		INSERT INTO order_seq (id, val) VALUES (1, 1)
-		ON CONFLICT (id) DO UPDATE SET val = order_seq.val + 1
-		RETURNING val`)).Scan(&seq); err != nil {
+		INSERT INTO order_seq (id, tenant_id, val) VALUES (1, $1, 1)
+		ON CONFLICT (id, tenant_id) DO UPDATE SET val = order_seq.val + 1
+		RETURNING val`), s.tid(ctx)).Scan(&seq); err != nil {
 		return nil, err
 	}
 	orderNumber := fmt.Sprintf("INV-%s-%04d", time.Now().Format("20060102"), seq)
@@ -265,19 +280,19 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address, deli
 
 	var o Order
 	err = tx.QueryRowContext(ctx, s.q(`
-		INSERT INTO orders (order_number, customer_id, address, total, delivery_type, delivery_fee)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO orders (tenant_id, order_number, customer_id, address, total, delivery_type, delivery_fee)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, order_number, customer_id, status, total, address, delivery_type, delivery_fee, note, created_at, updated_at`),
-		orderNumber, customerID, address, total, deliveryType, deliveryFee).
+		s.tid(ctx), orderNumber, customerID, address, total, deliveryType, deliveryFee).
 		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address, &o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	for _, it := range items {
 		if _, err := tx.ExecContext(ctx, s.q(`
-			INSERT INTO order_items (order_id, product_id, product_name, price, qty)
-			VALUES ($1, $2, $3, $4, $5)`),
-			o.ID, it.ProductID, it.ProductName, it.Price, it.Qty); err != nil {
+			INSERT INTO order_items (tenant_id, order_id, product_id, product_name, price, qty)
+			VALUES ($1, $2, $3, $4, $5, $6)`),
+			s.tid(ctx), o.ID, it.ProductID, it.ProductName, it.Price, it.Qty); err != nil {
 			return nil, err
 		}
 		o.Items = append(o.Items, it)
@@ -293,9 +308,10 @@ func (s *Store) ListOrders(ctx context.Context, status string, limit int) ([]Ord
 		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.note, o.created_at, o.updated_at,
 		       c.phone, c.name, c.status AS customer_status
 		FROM orders o JOIN customers c ON c.id = o.customer_id`
-	args := []any{}
+	args := []any{s.tid(ctx), s.tid(ctx)}
+	q += ` WHERE o.tenant_id = $1 AND c.tenant_id = $2`
 	if status != "" {
-		q += ` WHERE o.status = $1`
+		q += ` AND o.status = $3`
 		args = append(args, status)
 	}
 	if limit <= 0 {
@@ -338,7 +354,7 @@ func (s *Store) GetOrder(ctx context.Context, id int64) (*Order, error) {
 	err := s.db.QueryRowContext(ctx, s.q(`
 		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.note, o.created_at, o.updated_at,
 		       c.phone, c.name, c.status
-		FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1`), id).
+		FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1 AND o.tenant_id = $2 AND c.tenant_id = $3`), id, s.tid(ctx), s.tid(ctx)).
 		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address,
 			&o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status)
 	if err == sql.ErrNoRows {
@@ -358,7 +374,7 @@ func (s *Store) GetOrder(ctx context.Context, id int64) (*Order, error) {
 
 func (s *Store) getOrderItems(ctx context.Context, orderID int64) ([]OrderItem, error) {
 	rows, err := s.db.QueryContext(ctx, s.q(`
-		SELECT id, order_id, product_id, product_name, price, qty FROM order_items WHERE order_id = $1`), orderID)
+		SELECT id, order_id, product_id, product_name, price, qty FROM order_items WHERE order_id = $1 AND tenant_id = $2`), orderID, s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -375,20 +391,21 @@ func (s *Store) getOrderItems(ctx context.Context, orderID int64) ([]OrderItem, 
 }
 
 func (s *Store) UpdateOrderStatus(ctx context.Context, id int64, status string) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE orders SET status = $1, updated_at = $2 WHERE id = $3`), status, time.Now(), id)
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE orders SET status = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4`), status, time.Now(), id, s.tid(ctx))
 	return err
 }
 
 func (s *Store) DashboardStats(ctx context.Context) (*DashboardStats, error) {
 	var st DashboardStats
 	startOfDay := time.Now().Truncate(24 * time.Hour)
+	tid := s.tid(ctx)
 	err := s.db.QueryRowContext(ctx, s.q(`
 		SELECT
-			(SELECT COUNT(*) FROM orders WHERE created_at >= $1),
-			(SELECT COALESCE(SUM(total),0) FROM orders WHERE created_at >= $2 AND status != 'batal'),
-			(SELECT COUNT(*) FROM customers),
-			(SELECT COUNT(*) FROM orders WHERE status = 'baru')`),
-		startOfDay, startOfDay).Scan(&st.OrdersToday, &st.RevenueToday, &st.TotalCustomers, &st.PendingOrders)
+			(SELECT COUNT(*) FROM orders WHERE tenant_id = $1 AND created_at >= $2),
+			(SELECT COALESCE(SUM(total),0) FROM orders WHERE tenant_id = $3 AND created_at >= $4 AND status != 'batal'),
+			(SELECT COUNT(*) FROM customers WHERE tenant_id = $5),
+			(SELECT COUNT(*) FROM orders WHERE tenant_id = $6 AND status = 'baru')`),
+		tid, startOfDay, tid, startOfDay, tid, tid).Scan(&st.OrdersToday, &st.RevenueToday, &st.TotalCustomers, &st.PendingOrders)
 	return &st, err
 }
 
@@ -396,9 +413,9 @@ func (s *Store) DashboardStats(ctx context.Context) (*DashboardStats, error) {
 
 func (s *Store) SaveChatMessage(ctx context.Context, m *ChatMessage) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
-		INSERT INTO chat_messages (customer_id, direction, message_type, body, media_url, wa_message_id)
-		VALUES ($1, $2, $3, $4, $5, $6)`),
-		m.CustomerID, m.Direction, m.MessageType, m.Body, m.MediaURL, m.WAMessageID)
+		INSERT INTO chat_messages (tenant_id, customer_id, direction, message_type, body, media_url, wa_message_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`),
+		s.tid(ctx), m.CustomerID, m.Direction, m.MessageType, m.Body, m.MediaURL, m.WAMessageID)
 	return err
 }
 
@@ -410,7 +427,7 @@ func (s *Store) ListChatMessages(ctx context.Context, customerID int64, limit in
 		SELECT cm.id, cm.customer_id, cm.direction, cm.message_type, cm.body, cm.media_url, cm.wa_message_id, cm.created_at,
 		       c.name, c.phone
 		FROM chat_messages cm JOIN customers c ON c.id = cm.customer_id
-		WHERE cm.customer_id = $1 ORDER BY cm.created_at ASC LIMIT $2`), customerID, limit)
+		WHERE cm.customer_id = $1 AND cm.tenant_id = $2 AND c.tenant_id = $3 ORDER BY cm.created_at ASC LIMIT $4`), customerID, s.tid(ctx), s.tid(ctx), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -433,8 +450,9 @@ func (s *Store) RecentConversations(ctx context.Context) ([]Conversation, error)
 	rows, err := s.db.QueryContext(ctx, s.q(`
 		SELECT cm.customer_id, c.phone, c.name, cm.body, cm.direction, cm.created_at
 		FROM chat_messages cm JOIN customers c ON c.id = cm.customer_id
-		WHERE cm.id IN (SELECT MAX(id) FROM chat_messages GROUP BY customer_id)
-		ORDER BY cm.created_at DESC LIMIT 200`))
+		WHERE cm.tenant_id = $1 AND c.tenant_id = $2
+		  AND cm.id IN (SELECT MAX(id) FROM chat_messages WHERE tenant_id = $3 GROUP BY customer_id)
+		ORDER BY cm.created_at DESC LIMIT 200`), s.tid(ctx), s.tid(ctx), s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +471,7 @@ func (s *Store) RecentConversations(ctx context.Context) ([]Conversation, error)
 // ---------- Quick replies ----------
 
 func (s *Store) ListQuickReplies(ctx context.Context) ([]QuickReply, error) {
-	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, keyword, reply, is_active, created_at FROM quick_replies ORDER BY keyword ASC`))
+	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, keyword, reply, is_active, created_at FROM quick_replies WHERE tenant_id = $1 ORDER BY keyword ASC`), s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +491,7 @@ func (s *Store) GetQuickReplyByKeyword(ctx context.Context, keyword string) (*Qu
 	var q QuickReply
 	err := s.db.QueryRowContext(ctx, s.q(`
 		SELECT id, keyword, reply, is_active, created_at FROM quick_replies
-		WHERE keyword = $1 AND is_active = true`), strings.ToLower(strings.TrimSpace(keyword))).
+		WHERE keyword = $1 AND is_active = true AND tenant_id = $2`), strings.ToLower(strings.TrimSpace(keyword)), s.tid(ctx)).
 		Scan(&q.ID, &q.Keyword, &q.Reply, &q.IsActive, &q.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -487,20 +505,20 @@ func (s *Store) GetQuickReplyByKeyword(ctx context.Context, keyword string) (*Qu
 func (s *Store) CreateQuickReply(ctx context.Context, q *QuickReply) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO quick_replies (keyword, reply, is_active) VALUES ($1, $2, $3) RETURNING id`),
-		strings.ToLower(strings.TrimSpace(q.Keyword)), q.Reply, q.IsActive).Scan(&id)
+		INSERT INTO quick_replies (tenant_id, keyword, reply, is_active) VALUES ($1, $2, $3, $4) RETURNING id`),
+		s.tid(ctx), strings.ToLower(strings.TrimSpace(q.Keyword)), q.Reply, q.IsActive).Scan(&id)
 	return id, err
 }
 
 func (s *Store) UpdateQuickReply(ctx context.Context, q *QuickReply) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
-		UPDATE quick_replies SET keyword = $1, reply = $2, is_active = $3 WHERE id = $4`),
-		strings.ToLower(strings.TrimSpace(q.Keyword)), q.Reply, q.IsActive, q.ID)
+		UPDATE quick_replies SET keyword = $1, reply = $2, is_active = $3 WHERE id = $4 AND tenant_id = $5`),
+		strings.ToLower(strings.TrimSpace(q.Keyword)), q.Reply, q.IsActive, q.ID, s.tid(ctx))
 	return err
 }
 
 func (s *Store) DeleteQuickReply(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM quick_replies WHERE id = $1`), id)
+	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM quick_replies WHERE id = $1 AND tenant_id = $2`), id, s.tid(ctx))
 	return err
 }
 
@@ -509,14 +527,14 @@ func (s *Store) DeleteQuickReply(ctx context.Context, id int64) error {
 func (s *Store) CreateBroadcast(ctx context.Context, b *Broadcast) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO broadcasts (message, segment, total_targets) VALUES ($1, $2, $3) RETURNING id`),
-		b.Message, b.Segment, b.TotalTargets).Scan(&id)
+		INSERT INTO broadcasts (tenant_id, message, segment, total_targets) VALUES ($1, $2, $3, $4) RETURNING id`),
+		s.tid(ctx), b.Message, b.Segment, b.TotalTargets).Scan(&id)
 	return id, err
 }
 
 func (s *Store) ListBroadcasts(ctx context.Context) ([]Broadcast, error) {
 	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, message, segment, total_targets, sent, failed, status, created_at, finished_at
-		FROM broadcasts ORDER BY created_at DESC LIMIT 100`))
+		FROM broadcasts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 100`), s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +557,7 @@ func (s *Store) GetBroadcast(ctx context.Context, id int64) (*Broadcast, error) 
 	var b Broadcast
 	var fin sql.NullTime
 	err := s.db.QueryRowContext(ctx, s.q(`SELECT id, message, segment, total_targets, sent, failed, status, created_at, finished_at
-		FROM broadcasts WHERE id = $1`), id).
+		FROM broadcasts WHERE id = $1 AND tenant_id = $2`), id, s.tid(ctx)).
 		Scan(&b.ID, &b.Message, &b.Segment, &b.TotalTargets, &b.Sent, &b.Failed, &b.Status, &b.CreatedAt, &fin)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -552,17 +570,17 @@ func (s *Store) GetBroadcast(ctx context.Context, id int64) (*Broadcast, error) 
 }
 
 func (s *Store) SetBroadcastRunning(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE broadcasts SET status = 'running' WHERE id = $1 AND status = 'pending'`), id)
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE broadcasts SET status = 'running' WHERE id = $1 AND status = 'pending' AND tenant_id = $2`), id, s.tid(ctx))
 	return err
 }
 
 func (s *Store) BroadcastProgress(ctx context.Context, id int64, sent, failed int) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE broadcasts SET sent = $2, failed = $3 WHERE id = $1`), id, sent, failed)
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE broadcasts SET sent = $2, failed = $3 WHERE id = $1 AND tenant_id = $4`), id, sent, failed, s.tid(ctx))
 	return err
 }
 
 func (s *Store) FinishBroadcast(ctx context.Context, id int64, status string) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE broadcasts SET status = $2, finished_at = $3 WHERE id = $1`), id, status, time.Now())
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE broadcasts SET status = $2, finished_at = $3 WHERE id = $1 AND tenant_id = $4`), id, status, time.Now(), s.tid(ctx))
 	return err
 }
 
@@ -572,7 +590,7 @@ func (s *Store) GetOrderSession(ctx context.Context, customerID int64) (*OrderSe
 	var os OrderSession
 	var itemsJSON string
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT customer_id, state, product_id, qty, address, delivery_type, items, updated_at FROM order_sessions WHERE customer_id = $1`), customerID).
+		SELECT customer_id, state, product_id, qty, address, delivery_type, items, updated_at FROM order_sessions WHERE customer_id = $1 AND tenant_id = $2`), customerID, s.tid(ctx)).
 		Scan(&os.CustomerID, &os.State, &os.ProductID, &os.Qty, &os.Address, &os.DeliveryType, &itemsJSON, &os.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -593,18 +611,18 @@ func (s *Store) UpsertOrderSession(ctx context.Context, os *OrderSession) error 
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, s.q(`
-		INSERT INTO order_sessions (customer_id, state, product_id, qty, address, delivery_type, items, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (customer_id) DO UPDATE SET
+		INSERT INTO order_sessions (tenant_id, customer_id, state, product_id, qty, address, delivery_type, items, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (tenant_id, customer_id) DO UPDATE SET
 			state = EXCLUDED.state, product_id = EXCLUDED.product_id, qty = EXCLUDED.qty,
 			address = EXCLUDED.address, delivery_type = EXCLUDED.delivery_type,
 			items = EXCLUDED.items, updated_at = EXCLUDED.updated_at`),
-		os.CustomerID, os.State, os.ProductID, os.Qty, os.Address, os.DeliveryType, string(itemsJSON), time.Now())
+		s.tid(ctx), os.CustomerID, os.State, os.ProductID, os.Qty, os.Address, os.DeliveryType, string(itemsJSON), time.Now())
 	return err
 }
 
 func (s *Store) DeleteOrderSession(ctx context.Context, customerID int64) error {
-	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM order_sessions WHERE customer_id = $1`), customerID)
+	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM order_sessions WHERE customer_id = $1 AND tenant_id = $2`), customerID, s.tid(ctx))
 	return err
 }
 
@@ -614,7 +632,7 @@ func (s *Store) DeleteOrderSession(ctx context.Context, customerID int64) error 
 func (s *Store) GetAIUsageCount(ctx context.Context, customerID int64, day string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT count FROM ai_usage WHERE customer_id = $1 AND day = $2`), customerID, day).Scan(&n)
+		SELECT count FROM ai_usage WHERE customer_id = $1 AND day = $2 AND tenant_id = $3`), customerID, day, s.tid(ctx)).Scan(&n)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -627,8 +645,8 @@ func (s *Store) GetAIUsageCount(ctx context.Context, customerID int64, day strin
 // IncrementAIUsage menaikkan penghitung penggunaan AI untuk pelanggan hari ini.
 func (s *Store) IncrementAIUsage(ctx context.Context, customerID int64, day string) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
-		INSERT INTO ai_usage (customer_id, day, count) VALUES ($1, $2, 1)
-		ON CONFLICT (customer_id, day) DO UPDATE SET count = ai_usage.count + 1`), customerID, day)
+		INSERT INTO ai_usage (tenant_id, customer_id, day, count) VALUES ($1, $2, $3, 1)
+		ON CONFLICT (tenant_id, customer_id, day) DO UPDATE SET count = ai_usage.count + 1`), s.tid(ctx), customerID, day)
 	return err
 }
 
@@ -636,7 +654,7 @@ func (s *Store) IncrementAIUsage(ctx context.Context, customerID int64, day stri
 
 func (s *Store) ListWAAccounts(ctx context.Context) ([]WAAccount, error) {
 	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, username, token, token_expires_at, device_id, is_active, created_at, updated_at
-		FROM wa_accounts ORDER BY id ASC`))
+		FROM wa_accounts WHERE tenant_id = $1 ORDER BY id ASC`), s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -661,7 +679,7 @@ func (s *Store) GetWAAccountByUsername(ctx context.Context, username string) (*W
 	var a WAAccount
 	var exp sql.NullTime
 	err := s.db.QueryRowContext(ctx, s.q(`SELECT id, username, password, token, token_expires_at, device_id, is_active, created_at, updated_at
-		FROM wa_accounts WHERE username = $1`), username).
+		FROM wa_accounts WHERE username = $1 AND tenant_id = $2`), username, s.tid(ctx)).
 		Scan(&a.ID, &a.Username, &a.Password, &a.Token, &exp, &a.DeviceID, &a.IsActive, &a.CreatedAt, &a.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -680,7 +698,7 @@ func (s *Store) GetActiveWAAccount(ctx context.Context) (*WAAccount, error) {
 	var a WAAccount
 	var exp sql.NullTime
 	err := s.db.QueryRowContext(ctx, s.q(`SELECT id, username, password, token, token_expires_at, device_id, is_active, created_at, updated_at
-		FROM wa_accounts WHERE is_active = true ORDER BY id ASC LIMIT 1`)).
+		FROM wa_accounts WHERE is_active = true AND tenant_id = $1 ORDER BY id ASC LIMIT 1`), s.tid(ctx)).
 		Scan(&a.ID, &a.Username, &a.Password, &a.Token, &exp, &a.DeviceID, &a.IsActive, &a.CreatedAt, &a.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -698,12 +716,12 @@ func (s *Store) GetActiveWAAccount(ctx context.Context) (*WAAccount, error) {
 func (s *Store) UpsertWAAccount(ctx context.Context, username, password, deviceID string, isActive bool) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO wa_accounts (username, password, device_id, is_active)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password,
-			device_id = EXCLUDED.device_id, is_active = EXCLUDED.is_active, updated_at = $5
+		INSERT INTO wa_accounts (tenant_id, username, password, device_id, is_active)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (tenant_id, username) DO UPDATE SET password = EXCLUDED.password,
+			device_id = EXCLUDED.device_id, is_active = EXCLUDED.is_active, updated_at = $6
 		RETURNING id`),
-		username, s.enc(password), deviceID, isActive, time.Now()).Scan(&id)
+		s.tid(ctx), username, s.enc(password), deviceID, isActive, time.Now()).Scan(&id)
 	return id, err
 }
 
@@ -713,25 +731,26 @@ func (s *Store) SetWAAccountActive(ctx context.Context, id int64) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, s.q(`UPDATE wa_accounts SET is_active = false`)); err != nil {
+	tid := s.tid(ctx)
+	if _, err := tx.ExecContext(ctx, s.q(`UPDATE wa_accounts SET is_active = false WHERE tenant_id = $1`), tid); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, s.q(`UPDATE wa_accounts SET is_active = true WHERE id = $1`), id); err != nil {
+	if _, err := tx.ExecContext(ctx, s.q(`UPDATE wa_accounts SET is_active = true WHERE id = $1 AND tenant_id = $2`), id, tid); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) UpdateWAToken(ctx context.Context, id int64, token string, expiresAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, s.q(`UPDATE wa_accounts SET token = $1, token_expires_at = $2, updated_at = $3 WHERE id = $4`),
-		s.enc(token), expiresAt, time.Now(), id)
+	_, err := s.db.ExecContext(ctx, s.q(`UPDATE wa_accounts SET token = $1, token_expires_at = $2, updated_at = $3 WHERE id = $4 AND tenant_id = $5`),
+		s.enc(token), expiresAt, time.Now(), id, s.tid(ctx))
 	return err
 }
 
 // ---------- Settings ----------
 
 func (s *Store) GetSettings(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, s.q(`SELECT key, value FROM settings`))
+	rows, err := s.db.QueryContext(ctx, s.q(`SELECT key, value FROM settings WHERE tenant_id = $1`), s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -749,8 +768,8 @@ func (s *Store) GetSettings(ctx context.Context) (map[string]string, error) {
 
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx, s.q(`
-		INSERT INTO settings (key, value) VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`), key, value)
+		INSERT INTO settings (tenant_id, key, value) VALUES ($1, $2, $3)
+		ON CONFLICT (tenant_id, key) DO UPDATE SET value = EXCLUDED.value`), s.tid(ctx), key, value)
 	return err
 }
 
@@ -767,7 +786,7 @@ type KnowledgeDoc struct {
 
 func (s *Store) ListKnowledgeDocs(ctx context.Context) ([]KnowledgeDoc, error) {
 	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id, filename, file_type, size_bytes, chunk_count, created_at
-		FROM knowledge_docs ORDER BY created_at DESC`))
+		FROM knowledge_docs WHERE tenant_id = $1 ORDER BY created_at DESC`), s.tid(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -786,9 +805,9 @@ func (s *Store) ListKnowledgeDocs(ctx context.Context) ([]KnowledgeDoc, error) {
 func (s *Store) AddKnowledgeDoc(ctx context.Context, doc *KnowledgeDoc, data []byte) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, s.q(`
-		INSERT INTO knowledge_docs (filename, file_type, size_bytes, chunk_count, data)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`),
-		doc.Filename, doc.FileType, doc.SizeBytes, doc.ChunkCount, data).Scan(&id)
+		INSERT INTO knowledge_docs (tenant_id, filename, file_type, size_bytes, chunk_count, data)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`),
+		s.tid(ctx), doc.Filename, doc.FileType, doc.SizeBytes, doc.ChunkCount, data).Scan(&id)
 	return id, err
 }
 
@@ -802,18 +821,18 @@ func (s *Store) AddKnowledgeChunks(ctx context.Context, docID int64, chunks []st
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, ch := range chunks {
-		if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO knowledge_chunks (doc_id, content) VALUES ($1, $2)`), docID, ch); err != nil {
+		if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO knowledge_chunks (tenant_id, doc_id, content) VALUES ($1, $2, $3)`), s.tid(ctx), docID, ch); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, s.q(`UPDATE knowledge_docs SET chunk_count = $2 WHERE id = $1`), docID, len(chunks)); err != nil {
+	if _, err := tx.ExecContext(ctx, s.q(`UPDATE knowledge_docs SET chunk_count = $2 WHERE id = $1 AND tenant_id = $3`), docID, len(chunks), s.tid(ctx)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) DeleteKnowledgeDoc(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM knowledge_docs WHERE id = $1`), id)
+	_, err := s.db.ExecContext(ctx, s.q(`DELETE FROM knowledge_docs WHERE id = $1 AND tenant_id = $2`), id, s.tid(ctx))
 	return err
 }
 
@@ -840,9 +859,9 @@ func (s *Store) SearchKnowledgeChunks(ctx context.Context, query string, limit i
 	if s.dialect != "sqlite" {
 		rows, err := s.db.QueryContext(ctx, s.q(`
 			SELECT id, content FROM knowledge_chunks
-			WHERE to_tsvector('simple', content) @@ plainto_tsquery('simple', $1)
-			ORDER BY ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', $1)) DESC
-			LIMIT 20`), q)
+			WHERE tenant_id = $1 AND to_tsvector('simple', content) @@ plainto_tsquery('simple', $2)
+			ORDER BY ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', $2)) DESC
+			LIMIT 20`), s.tid(ctx), q)
 		if err == nil {
 			for rows.Next() {
 				var id int64
@@ -863,18 +882,20 @@ func (s *Store) SearchKnowledgeChunks(ctx context.Context, query string, limit i
 	// 2) Cadangan: LIKE bila full-text tidak menemukan cukup (berlaku untuk
 	//    Postgres maupun SQLite).
 	if len(candidates) < limit {
-		where := ""
-		args := []any{}
+		var where strings.Builder
+		args := []any{s.tid(ctx)}
+		where.WriteString("tenant_id = $1 AND (")
 		for i, w := range words {
 			if i > 0 {
-				where += " OR "
+				where.WriteString(" OR ")
 			}
-			where += fmt.Sprintf("LOWER(content) LIKE LOWER($%d)", i+1)
+			fmt.Fprintf(&where, "LOWER(content) LIKE LOWER($%d)", i+2)
 			args = append(args, "%"+w+"%")
 		}
+		where.WriteString(")")
 		rows2, err := s.db.QueryContext(ctx, s.q(fmt.Sprintf(`
 			SELECT id, content FROM knowledge_chunks WHERE %s ORDER BY id DESC LIMIT 20`,
-			where)), args...)
+			where.String())), args...)
 		if err == nil {
 			for rows2.Next() {
 				var id int64

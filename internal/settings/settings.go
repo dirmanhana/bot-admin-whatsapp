@@ -12,19 +12,19 @@ import (
 )
 
 const (
-	KeyStoreName      = "store_name"
-	KeyStoreAddr      = "store_address"
-	KeyAdminPhone     = "admin_phone"
-	KeyAIPersonality  = "ai_personality"
-	KeyAIName         = "ai_name"
-	KeyStoreHours     = "store_hours"
-	KeyPaymentMethods = "payment_methods"
-	KeyDeliveryFee    = "delivery_fee"
-	KeyAIDailyQuota   = "ai_daily_quota"
-	KeyAIMaxTokens    = "ai_max_tokens"
-	KeyAIMaxProducts  = "ai_max_products"
-	KeyAIMaxHistory   = "ai_max_history"
-	KeyDashPassword   = "dashboard_password_hash"
+	KeyStoreName        = "store_name"
+	KeyStoreAddr        = "store_address"
+	KeyAdminPhone       = "admin_phone"
+	KeyAIPersonality    = "ai_personality"
+	KeyAIName           = "ai_name"
+	KeyStoreHours       = "store_hours"
+	KeyPaymentMethods   = "payment_methods"
+	KeyDeliveryFee      = "delivery_fee"
+	KeyAIDailyQuota     = "ai_daily_quota"
+	KeyAIMaxTokens      = "ai_max_tokens"
+	KeyAIMaxProducts    = "ai_max_products"
+	KeyAIMaxHistory     = "ai_max_history"
+	KeyDashPassword     = "dashboard_password_hash"
 	KeyDashSessionEpoch = "dashboard_session_epoch"
 )
 
@@ -46,28 +46,39 @@ type Settings struct {
 
 // Service menyediakan pengaturan toko dengan cache singkat agar tidak
 // membebani DB per pesan. Nilai dari database menang atas .env.
+// Cache dipisah per tenant (multi-tenant).
 type Service struct {
 	store *store.Store
 	cfg   *config.Config
 
-	mu       sync.Mutex
-	cached   *Settings
-	cachedAt time.Time
+	mu     sync.Mutex
+	cached map[int64]*cacheEntry
+}
+
+type cacheEntry struct {
+	st   *Settings
+	when time.Time
 }
 
 func New(st *store.Store, cfg *config.Config) *Service {
-	return &Service{store: st, cfg: cfg}
+	return &Service{store: st, cfg: cfg, cached: map[int64]*cacheEntry{}}
 }
 
-// Get memuat pengaturan toko; nilai dari database menang atas .env.
-// Di-cache 60 detik.
+// Get memuat pengaturan toko untuk tenant dari context; nilai dari database
+// menang atas .env. Di-cache 60 detik per tenant.
 func (s *Service) Get(ctx context.Context) (*Settings, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.cached != nil && time.Since(s.cachedAt) < 60*time.Second {
-		return s.cached, nil
+	tid := store.TenantID(ctx)
+	if tid <= 0 {
+		tid = 1
 	}
+
+	s.mu.Lock()
+	if e, ok := s.cached[tid]; ok && time.Since(e.when) < 60*time.Second {
+		s.mu.Unlock()
+		return e.st, nil
+	}
+	s.mu.Unlock()
+
 	kv, err := s.store.GetSettings(ctx)
 	if err != nil {
 		return nil, err
@@ -110,8 +121,10 @@ func (s *Service) Get(ctx context.Context) (*Settings, error) {
 			st.AIMaxHistory = n
 		}
 	}
-	s.cached = st
-	s.cachedAt = time.Now()
+
+	s.mu.Lock()
+	s.cached[tid] = &cacheEntry{st: st, when: time.Now()}
+	s.mu.Unlock()
 	return st, nil
 }
 
@@ -142,7 +155,7 @@ func (s *Service) Save(ctx context.Context, st Settings) error {
 
 func (s *Service) InvalidateCache() {
 	s.mu.Lock()
-	s.cached = nil
+	s.cached = map[int64]*cacheEntry{}
 	s.mu.Unlock()
 }
 

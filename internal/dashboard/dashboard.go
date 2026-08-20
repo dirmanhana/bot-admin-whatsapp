@@ -36,7 +36,7 @@ type Server struct {
 	settings *settings.Service
 	tpl      *templates
 
-	loginMu      sync.Mutex
+	loginMu       sync.Mutex
 	loginAttempts map[string]*loginAttempt
 }
 
@@ -92,23 +92,12 @@ func (s *Server) clearLoginFails(ip string) {
 	delete(s.loginAttempts, ip)
 }
 
-// passwordHash mengembalikan hash bcrypt password dashboard bila sudah diubah
-// lewat Pengaturan; kosong bila masih memakai DASHBOARD_PASSWORD dari .env.
-func (s *Server) passwordHash(ctx context.Context) string {
-	kv, err := s.store.GetSettings(ctx)
-	if err != nil {
-		return ""
+// verifyTenantPassword memeriksa kata sandi terhadap hash bcrypt tenant.
+func (s *Server) verifyTenantPassword(t *store.Tenant, password string) bool {
+	if t == nil || t.PasswordHash == "" {
+		return false
 	}
-	return strings.TrimSpace(kv["dashboard_password_hash"])
-}
-
-// verifyPassword memeriksa kata sandi dashboard terhadap hash DB (bila ada)
-// atau password dari .env.
-func (s *Server) verifyPassword(ctx context.Context, password string) bool {
-	if hash := s.passwordHash(ctx); hash != "" {
-		return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
-	}
-	return password == s.cfg.DashboardPassword
+	return bcrypt.CompareHashAndPassword([]byte(t.PasswordHash), []byte(password)) == nil
 }
 
 func (s *Server) Register(app *fiber.App) {
@@ -134,6 +123,10 @@ func (s *Server) Register(app *fiber.App) {
 	admin.Get("/login", s.pageLogin)
 	admin.Post("/login", s.requireCSRF, s.actionLogin)
 	admin.Post("/logout", s.requireCSRF, s.actionLogout)
+	if s.cfg.AllowRegistration {
+		admin.Get("/register", s.pageRegister)
+		admin.Post("/register", s.requireCSRF, s.actionRegister)
+	}
 
 	admin.Use(s.requireAuth)
 	admin.Use(s.requireCSRF)
@@ -208,55 +201,68 @@ func (s *Server) sign(v string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// sessionValue = "<user>.<epoch>.<exp>.<sign>". epoch naik saat password
+// sessionValue = "<tenantID>.<epoch>.<exp>.<sign>". epoch naik saat password
 // diubah (semua sesi lama invalid); exp = waktu kedaluwarsa unix.
-func (s *Server) sessionValue(epoch, exp int64) string {
-	payload := fmt.Sprintf("%s.%d.%d", s.cfg.DashboardUser, epoch, exp)
+func (s *Server) sessionValue(tid, epoch, exp int64) string {
+	payload := fmt.Sprintf("%d.%d.%d", tid, epoch, exp)
 	return payload + "." + s.sign(payload)
 }
 
-// parseSession memvalidasi cookie sesi. Mengembalikan epoch bila valid.
-func (s *Server) parseSession(c *fiber.Ctx) (bool, int64) {
+// parseSession memvalidasi cookie sesi. Mengembalikan tenant ID & epoch
+// bila valid (tenant masih aktif dan epoch sesi belum dibatalkan).
+func (s *Server) parseSession(c *fiber.Ctx) (bool, int64, int64) {
 	v := c.Cookies(sessionCookie)
 	if v == "" {
-		return false, 0
+		return false, 0, 0
 	}
 	parts := strings.Split(v, ".")
 	if len(parts) != 4 {
-		return false, 0
+		return false, 0, 0
 	}
 	payload := strings.Join(parts[:3], ".")
+	tid, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || tid <= 0 {
+		return false, 0, 0
+	}
 	epoch, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return false, 0
+		return false, 0, 0
 	}
 	exp, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil || exp < time.Now().Unix() {
-		return false, 0
+		return false, 0, 0
 	}
 	if !hmac.Equal([]byte(parts[3]), []byte(s.sign(payload))) {
-		return false, 0
+		return false, 0, 0
 	}
-	cur := s.settings.SessionEpoch(c.Context())
-	if epoch != cur {
-		return false, 0
+	t, err := s.store.GetTenant(context.Background(), tid)
+	if err != nil || t == nil || t.Status != "active" {
+		return false, 0, 0
 	}
-	return true, epoch
+	if epoch != t.SessionEpoch {
+		return false, 0, 0
+	}
+	return true, tid, epoch
 }
 
 func (s *Server) requireAuth(c *fiber.Ctx) error {
-	if ok, _ := s.parseSession(c); ok {
+	if ok, tid, _ := s.parseSession(c); ok {
+		c.Locals("tenantID", tid)
 		return c.Next()
 	}
 	return c.Redirect("/admin/login")
 }
 
-func (s *Server) setSession(c *fiber.Ctx) {
-	epoch := s.settings.SessionEpoch(c.Context())
+func (s *Server) setSession(c *fiber.Ctx, tid int64) {
+	t, err := s.store.GetTenant(context.Background(), tid)
+	epoch := int64(0)
+	if err == nil && t != nil {
+		epoch = t.SessionEpoch
+	}
 	exp := time.Now().Add(sessionTTL).Unix()
 	c.Cookie(&fiber.Cookie{
 		Name:     sessionCookie,
-		Value:    s.sessionValue(epoch, exp),
+		Value:    s.sessionValue(tid, epoch, exp),
 		Path:     "/",
 		HTTPOnly: true,
 		SameSite: "Lax",
@@ -274,14 +280,28 @@ func (s *Server) clearSession(c *fiber.Ctx) {
 	})
 }
 
+// tenantCtx membuat context ber-tenant untuk request dashboard.
+func (s *Server) tenantCtx(c *fiber.Ctx) context.Context {
+	return store.WithTenant(context.Background(), s.tenantID(c))
+}
+
+// tenantID mengambil ID tenant dari request (sesi login).
+func (s *Server) tenantID(c *fiber.Ctx) int64 {
+	tid, ok := c.Locals("tenantID").(int64)
+	if !ok || tid <= 0 {
+		return 1
+	}
+	return tid
+}
+
 // ---------- CSRF ----------
 
 // csrfToken menghasilkan token per sesi (atau per IP untuk halaman
 // pra-login). Token tidak pernah bocor ke origin lain, sehingga POST
 // dari situs pihak ketiga gagal diverifikasi.
 func (s *Server) csrfToken(c *fiber.Ctx) string {
-	if ok, epoch := s.parseSession(c); ok {
-		return s.sign(fmt.Sprintf("csrf:%s:%d", s.cfg.DashboardUser, epoch))
+	if ok, tid, epoch := s.parseSession(c); ok {
+		return s.sign(fmt.Sprintf("csrf:%d:%d", tid, epoch))
 	}
 	return s.sign("csrf:ip:" + c.IP())
 }
@@ -335,19 +355,24 @@ var navItems = []navItem{
 	{"settings", "/admin/settings", "Pengaturan", "settings"},
 }
 
-func (s *Server) storeName() string {
-	if st, err := s.settings.Get(context.Background()); err == nil && st.StoreName != "" {
+func (s *Server) storeName(ctx context.Context) string {
+	if st, err := s.settings.Get(ctx); err == nil && st.StoreName != "" {
 		return st.StoreName
 	}
 	return s.cfg.StoreName
 }
 
 func (s *Server) render(c *fiber.Ctx, name string, v view) error {
-	v.Store = s.storeName()
-	v.User = s.cfg.DashboardUser
+	ctx := s.tenantCtx(c)
+	v.Store = s.storeName(ctx)
+	if t, err := s.store.GetTenant(ctx, store.TenantID(ctx)); err == nil && t != nil {
+		v.User = t.Email
+	} else {
+		v.User = s.cfg.DashboardUser
+	}
 	v.Msg = c.Query("msg")
 	v.Err = c.Query("err")
-	v.Banner = s.securityBanner()
+	v.Banner = s.securityBanner(c)
 	v.CSRF = s.csrfToken(c)
 	v.Nav = navItems
 	c.Set("Content-Type", "text/html; charset=utf-8")
@@ -355,10 +380,12 @@ func (s *Server) render(c *fiber.Ctx, name string, v view) error {
 }
 
 // securityBanner mengingatkan admin bila memakai kredensial/secret default.
-func (s *Server) securityBanner() string {
-	ctx := context.Background()
-	if s.passwordHash(ctx) == "" && s.cfg.DashboardPassword == "admin123" {
-		return "Password dashboard masih default (admin123). Ubah lewat menu Pengaturan &gt; Keamanan."
+func (s *Server) securityBanner(c *fiber.Ctx) string {
+	ctx := s.tenantCtx(c)
+	if t, err := s.store.GetTenant(ctx, store.TenantID(ctx)); err == nil && t != nil {
+		if bcrypt.CompareHashAndPassword([]byte(t.PasswordHash), []byte("admin123")) == nil {
+			return "Password dashboard masih default (admin123). Ubah lewat menu Pengaturan &gt; Keamanan."
+		}
 	}
 	if s.cfg.SessionSecret == "insecure-session-secret" {
 		return "SESSION_SECRET masih default. Set nilai acak di .env untuk produksi."

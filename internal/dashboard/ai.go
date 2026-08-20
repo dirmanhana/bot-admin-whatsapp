@@ -17,7 +17,7 @@ import (
 const maxUploadSize = 25 << 20 // 25 MB
 
 func (s *Server) pageAI(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	settings, err := s.ai.Settings(ctx)
 	if err != nil {
 		return redirect(c, "/admin/ai", "Gagal memuat pengaturan: "+err.Error(), true)
@@ -37,7 +37,7 @@ func (s *Server) pageAI(c *fiber.Ctx) error {
 }
 
 func (s *Server) actionAISave(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	st := ai.Settings{
 		Provider: strings.TrimSpace(c.FormValue("provider")),
 		BaseURL:  strings.TrimSpace(c.FormValue("base_url")),
@@ -55,7 +55,7 @@ func (s *Server) actionAISave(c *fiber.Ctx) error {
 }
 
 func (s *Server) actionAITest(c *fiber.Ctx) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(s.tenantCtx(c), time.Minute)
 	defer cancel()
 
 	st, err := s.ai.Settings(ctx)
@@ -77,7 +77,7 @@ func (s *Server) actionAITest(c *fiber.Ctx) error {
 }
 
 func (s *Server) actionKnowledgeUpload(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	file, err := c.FormFile("file")
 	if err != nil {
 		return redirect(c, "/admin/ai", "Pilih file terlebih dahulu.", true)
@@ -131,7 +131,7 @@ func (s *Server) actionKnowledgeDelete(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("id tidak valid")
 	}
-	if err := s.store.DeleteKnowledgeDoc(context.Background(), id); err != nil {
+	if err := s.store.DeleteKnowledgeDoc(s.tenantCtx(c), id); err != nil {
 		return redirect(c, "/admin/ai", "Gagal menghapus: "+err.Error(), true)
 	}
 	return redirect(c, "/admin/ai", "Dokumen dihapus.", false)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 )
@@ -100,6 +101,31 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 func (s *Store) applyMigration(ctx context.Context, name, sqlText string) error {
+	// SQLite: beberapa migrasi men-DROP & membuat ulang tabel induk (mis.
+	// customers pada migrasi multi-tenant). PRAGMA foreign_keys tidak bisa
+	// diubah di dalam transaksi, jadi matikan di luar, lalu aktifkan kembali
+	// dan periksa integritas setelah commit.
+	if s.dialect == "sqlite" {
+		if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+			return fmt.Errorf("disable foreign_keys: %w", err)
+		}
+		defer func() {
+			_, _ = s.db.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+			rows, err := s.db.QueryContext(ctx, "PRAGMA foreign_key_check")
+			if err != nil {
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var tbl, parent, child string
+				var rowid int64
+				if rows.Scan(&tbl, &rowid, &parent, &child) == nil {
+					log.Printf("migrate %s: foreign_key_check: table=%s rowid=%d parent=%s child=%s", name, tbl, rowid, parent, child)
+				}
+			}
+		}()
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

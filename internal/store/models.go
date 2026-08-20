@@ -2,6 +2,18 @@ package store
 
 import "time"
 
+// Tenant adalah pemilik toko. Setiap tenant memiliki datanya sendiri
+// (produk, pesanan, pelanggan, dll.) yang diisolasi lewat tenant_id.
+type Tenant struct {
+	ID           int64     `json:"id"`
+	Email        string    `json:"email"`
+	PasswordHash string    `json:"-"`
+	Status       string    `json:"status"`
+	SessionEpoch int64     `json:"session_epoch"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type Customer struct {
 	ID        int64     `json:"id"`
 	Phone     string    `json:"phone"`

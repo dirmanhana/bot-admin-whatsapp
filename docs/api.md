@@ -75,10 +75,22 @@ Halaman login (HTML).
 
 ### `POST /admin/login`
 
-Form-encoded: `username`, `password`.
+Form-encoded: `username` (email), `password`.
 
-- Sukses: `302 → /admin/overview`, set cookie `admin_session` (HttpOnly, SameSite=Lax).
+- Sukses: `302 → /admin/overview`, set cookie `admin_session` (HttpOnly, SameSite=Lax) berisi ID tenant.
 - Gagal: `302 → /admin/login?err=...`.
+- Percobaan gagal dibatasi: 5x → terkunci 15 menit per IP.
+
+### `GET /admin/register`
+
+Halaman pendaftaran toko baru (multi-tenant). Nonaktif bila `ALLOW_REGISTRATION=false`.
+
+### `POST /admin/register`
+
+Form-encoded: `email`, `password`, `password_confirm`, `store_name` (opsional).
+
+- Membuat tenant baru (data terisolasi dari toko lain) lalu login otomatis → `302 → /admin/overview`.
+- Email sudah dipakai → `302 → /admin/register?err=...`.
 
 ### `POST /admin/logout`
 
@@ -86,7 +98,7 @@ Hapus cookie sesi → `302 → /admin/login`.
 
 ### Proteksi
 
-Semua route `/admin/*` (selain login) memeriksa cookie. Tanpa sesi valid → `302 → /admin/login`.
+Semua route `/admin/*` (selain login/register) memeriksa cookie. Tanpa sesi valid → `302 → /admin/login`. Sesi berisi ID tenant; semua data yang diakses dibatasi ke tenant tersebut (`tenant_id` dari context).
 
 ---
 

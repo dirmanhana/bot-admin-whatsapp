@@ -40,36 +40,48 @@ type Service struct {
 	stg    *settings.Service
 	cipher *cryptx.Cipher
 
-	mu       sync.Mutex
-	cached   *Settings
-	cachedAt time.Time
+	mu     sync.Mutex
+	cached map[int64]*aiSettingsCache // per tenant
 
 	cacheMu sync.Mutex
 	cache   map[string]cacheEntry
 }
 
+// aiSettingsCache menyimpan konfigurasi AI per tenant.
+type aiSettingsCache struct {
+	st   *Settings
+	when time.Time
+}
+
 // cacheEntry menyimpan jawaban untuk pertanyaan yang sama agar tidak
-// memanggil API berulang (hemat biaya). TTL 2 jam.
+// memanggil API berulang (hemat biaya). TTL 2 jam. Kunci berisi tenant ID
+// agar jawaban antar-toko tidak bocor.
 type cacheEntry struct {
-	answer    string
-	cachedAt  time.Time
+	answer   string
+	cachedAt time.Time
 }
 
 const cacheTTL = 2 * time.Hour
 
 func New(st *store.Store, cfg *config.Config, stg *settings.Service, cipher *cryptx.Cipher) *Service {
-	return &Service{store: st, cfg: cfg, stg: stg, cipher: cipher, cache: map[string]cacheEntry{}}
+	return &Service{store: st, cfg: cfg, stg: stg, cipher: cipher, cached: map[int64]*aiSettingsCache{}, cache: map[string]cacheEntry{}}
 }
 
-// Settings memuat konfigurasi AI; nilai dari database menang atas .env.
-// Di-cache 60 detik agar tidak membebani DB per pesan.
+// Settings memuat konfigurasi AI untuk tenant dari context; nilai dari
+// database menang atas .env. Di-cache 60 detik per tenant.
 func (s *Service) Settings(ctx context.Context) (*Settings, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.cached != nil && time.Since(s.cachedAt) < 60*time.Second {
-		return s.cached, nil
+	tid := store.TenantID(ctx)
+	if tid <= 0 {
+		tid = 1
 	}
+
+	s.mu.Lock()
+	if e, ok := s.cached[tid]; ok && time.Since(e.when) < 60*time.Second {
+		s.mu.Unlock()
+		return e.st, nil
+	}
+	s.mu.Unlock()
+
 	kv, err := s.store.GetSettings(ctx)
 	if err != nil {
 		return nil, err
@@ -99,14 +111,16 @@ func (s *Service) Settings(ctx context.Context) (*Settings, error) {
 		Model:    model,
 		Enabled:  kv[keyEnabled] == "1",
 	}
-	s.cached = st
-	s.cachedAt = time.Now()
+
+	s.mu.Lock()
+	s.cached[tid] = &aiSettingsCache{st: st, when: time.Now()}
+	s.mu.Unlock()
 	return st, nil
 }
 
 func (s *Service) InvalidateCache() {
 	s.mu.Lock()
-	s.cached = nil
+	s.cached = map[int64]*aiSettingsCache{}
 	s.mu.Unlock()
 }
 
@@ -153,9 +167,9 @@ func (s *Service) Answer(ctx context.Context, question string, history []store.C
 		return "", nil
 	}
 
-	// Cache pertanyaan identik (normalisasi huruf kecil) agar tidak
+	// Cache pertanyaan identik (normalisasi huruf kecil + tenant) agar tidak
 	// memanggil API berulang untuk pertanyaan yang sama.
-	cacheKey := strings.ToLower(question)
+	cacheKey := fmt.Sprintf("%d:%s", store.TenantID(ctx), strings.ToLower(question))
 	if cached, ok := s.cacheGet(cacheKey); ok {
 		return cached, nil
 	}

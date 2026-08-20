@@ -39,6 +39,7 @@ Bot layanan pelanggan + dashboard admin untuk toko/UMKM berbasis **WhatsApp**. M
 | 🛒 **Manajemen pesanan** | Ubah status → notifikasi WhatsApp otomatis ke customer |
 | ⚡ **Balasan cepat** | Kata kunci → balasan otomatis |
 | 📱 **Akun WhatsApp** | Kelola akun gowa, login QR, set webhook |
+| 👥 **Multi-tenant & multi-user** | Setiap toko punya data terpisah + login sendiri (email/password); daftar di `/admin/register` |
 | 🎛️ **Dashboard admin web** | Tampilan ala gowa (Tailwind/shadcn), mobile-friendly |
 
 ---
@@ -154,8 +155,9 @@ Lihat [.env.example](.env.example) untuk template lengkap.
 | `GOWA_BASE_URL` | `http://127.0.0.1:3000` | URL API gowa |
 | `GOWA_WEBHOOK_URL` | `http://127.0.0.1:8080/webhook/gowa` | URL yang didaftarkan ke gowa |
 | `GOWA_WEBHOOK_SECRET` | `secret` | Secret HMAC webhook (`X-Hub-Signature-256`) — harus sama dengan secret webhook device di gowa |
+| `ALLOW_REGISTRATION` | `true` | Izinkan pendaftaran toko baru di `/admin/register` |
 | `ADMIN_PHONE` | `628123456789` | Nomor admin (format internasional tanpa `+`) |
-| `DASHBOARD_USER` | `admin` | Login dashboard |
+| `DASHBOARD_USER` | `admin` | **Email** akun admin pertama (tenant 1) |
 | `DASHBOARD_PASSWORD` | `admin123` | **Ganti!** |
 | `SESSION_SECRET` | — | Kunci sesi (HMAC) |
 | `BROADCAST_DELAY_SECONDS` | `7` | Jeda antar pesan broadcast (anti-ban) |
@@ -182,7 +184,15 @@ Lihat [.env.example](.env.example) untuk template lengkap.
 
 ## Dashboard Admin
 
-Akses `http://localhost:8080/admin` (login `DASHBOARD_USER`/`DASHBOARD_PASSWORD`).
+Akses `http://localhost:8080/admin` dan masuk dengan **email + password** akun Anda.
+
+### Multi-user & multi-tenant
+
+- Setiap **toko = satu tenant** dengan data terpisah (produk, pelanggan, pesanan, balasan cepat, broadcast, knowledge base AI, akun WA, pengaturan).
+- Akun **pertama** dibuat otomatis saat start dari `DASHBOARD_USER` (email) dan `DASHBOARD_PASSWORD` di `.env` — data lama otomatis menjadi miliknya.
+- Toko lain **mendaftar sendiri** di `/admin/register` (email + password + nama toko). Matikan pendaftaran dengan `ALLOW_REGISTRATION=false` di `.env`.
+- Login dibatasi 5x gagal → terkunci 15 menit per IP. Ganti password lewat **Pengaturan → Keamanan** langsung membatalkan semua sesi lama.
+- **Webhook otomatis diarahkan ke tenant yang benar**: setiap akun WA gowa punya `device_id`, dan tombol *Set Webhook* di menu **Akun WA** memasang *secret khusus toko* pada device-nya. Signature `X-Hub-Signature-256` diverifikasi terhadap secret global (`.env`) atau secret tenant sebelum pesan diproses.
 
 | Menu | Fungsi |
 |---|---|
@@ -281,7 +291,8 @@ Migrasi: `internal/store/migrations/`
 
 | Tabel | Isi |
 |---|---|
-| `customers` | Pelanggan (phone unik, jid, nama, catatan, status `active`/`blocked`) |
+| `tenants` | Toko/pemilik (email, password bcrypt, status, `session_epoch`, `webhook_secret`) |
+| `customers` | Pelanggan (phone unik per tenant, jid, nama, catatan, status `active`/`blocked`) |
 | `products` | Produk (harga BIGINT rupiah, stok, `is_active`, path gambar) |
 | `orders` | Order (nomor unik `INV-...`, status, total, alamat) |
 | `order_items` | Item per order (nama, harga, qty) |
@@ -310,7 +321,7 @@ Semua di bawah `/admin` — lihat [docs/api.md](docs/api.md) untuk detail lengka
 
 | Method | Path | Fungsi |
 |---|---|---|
-| GET/POST | `/admin/login`, POST `/admin/logout` | Autentikasi |
+| GET | `/admin/login`, `/admin/register`, POST `/admin/login`, POST `/admin/register` | Autentikasi & pendaftaran toko |
 | GET | `/admin/overview`, `/admin/orders`, `/admin/products`, `/admin/customers`, `/admin/broadcast`, `/admin/replies`, `/admin/accounts`, `/admin/ai` | Halaman |
 | POST | `/admin/orders/:id/status`, `/admin/products`, `/admin/products/:id`, `/admin/products/:id/delete` | Kelola order & produk |
 | POST | `/admin/customers/:id/status`, `/admin/customers/:id/chat` | Kelola pelanggan |
@@ -326,8 +337,8 @@ Semua di bawah `/admin` — lihat [docs/api.md](docs/api.md) untuk detail lengka
 
 - **Jangan commit `.env`** (sudah di-`.gitignore`).
 - Ganti `DASHBOARD_PASSWORD`, `SESSION_SECRET`, dan `GOWA_WEBHOOK_SECRET` sebelum dipakai produksi.
-- **`GOWA_WEBHOOK_SECRET` wajib** — aplikasi menolak berjalan bila masih default (`secret`). Webhook memverifikasi header `X-Hub-Signature-256` (HMAC-SHA256) pada setiap request.
-- Sesi dashboard berupa cookie HttpOnly + HMAC (`SESSION_SECRET`), kedaluwarsa **24 jam**; ganti password langsung membatalkan semua sesi lama.
+- **`GOWA_WEBHOOK_SECRET` wajib** — aplikasi menolak berjalan bila masih default (`secret`). Webhook memverifikasi header `X-Hub-Signature-256` (HMAC-SHA256) pada setiap request; di mode multi-tenant, secret khusus setiap toko (disetel lewat *Set Webhook*) juga diterima, dan pesan diarahkan ke tenant pemilik `device_id`.
+- Sesi dashboard berupa cookie HttpOnly + HMAC (`SESSION_SECRET`) berisi ID tenant, kedaluwarsa **24 jam**; ganti password langsung membatalkan semua sesi tenant tersebut.
 - Semua POST dashboard wajib menyertakan token CSRF (`_csrf`, ditanam di form).
 - Login dibatasi 5x percobaan gagal → terkunci 15 menit per IP.
 - Password & token gowa (`wa_accounts`) serta API key AI dienkripsi **AES-GCM** di DB memakai kunci turunan `SESSION_SECRET`. Data lama (polos) tetap terbaca saat migrasi, lalu terenkripsi ulang saat penyimpanan berikutnya.

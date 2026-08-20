@@ -17,7 +17,7 @@ func (s *Server) pageLogin(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageOverview(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	stats, err := s.store.DashboardStats(ctx)
 	if err != nil {
 		return redirect(c, "/admin/overview", "Gagal memuat statistik: "+err.Error(), true)
@@ -33,7 +33,7 @@ func (s *Server) pageOverview(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageOrders(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	status := c.Query("status")
 	orders, err := s.store.ListOrders(ctx, status, 200)
 	if err != nil {
@@ -46,7 +46,7 @@ func (s *Server) pageOrders(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageProducts(c *fiber.Ctx) error {
-	products, err := s.store.ListProducts(context.Background(), false)
+	products, err := s.store.ListProducts(s.tenantCtx(c), false)
 	if err != nil {
 		return redirect(c, "/admin/products", "Gagal memuat produk: "+err.Error(), true)
 	}
@@ -58,7 +58,7 @@ func (s *Server) pageProducts(c *fiber.Ctx) error {
 
 func (s *Server) pageCustomers(c *fiber.Ctx) error {
 	q := strings.TrimSpace(c.Query("q"))
-	customers, err := s.store.ListCustomers(context.Background(), q)
+	customers, err := s.store.ListCustomers(s.tenantCtx(c), q)
 	if err != nil {
 		return redirect(c, "/admin/customers", "Gagal memuat pelanggan: "+err.Error(), true)
 	}
@@ -69,7 +69,7 @@ func (s *Server) pageCustomers(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageChat(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("id tidak valid")
@@ -89,7 +89,7 @@ func (s *Server) pageChat(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageBroadcast(c *fiber.Ctx) error {
-	broadcasts, err := s.store.ListBroadcasts(context.Background())
+	broadcasts, err := s.store.ListBroadcasts(s.tenantCtx(c))
 	if err != nil {
 		return redirect(c, "/admin/broadcast", "Gagal memuat broadcast: "+err.Error(), true)
 	}
@@ -100,7 +100,7 @@ func (s *Server) pageBroadcast(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageReplies(c *fiber.Ctx) error {
-	replies, err := s.store.ListQuickReplies(context.Background())
+	replies, err := s.store.ListQuickReplies(s.tenantCtx(c))
 	if err != nil {
 		return redirect(c, "/admin/replies", "Gagal memuat balasan: "+err.Error(), true)
 	}
@@ -117,7 +117,7 @@ type connInfo struct {
 }
 
 func (s *Server) pageAccounts(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	accounts, err := s.store.ListWAAccounts(ctx)
 	if err != nil {
 		return redirect(c, "/admin/accounts", "Gagal memuat akun: "+err.Error(), true)
@@ -147,7 +147,7 @@ func (s *Server) pageAccounts(c *fiber.Ctx) error {
 }
 
 func (s *Server) pageAccountQR(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := s.tenantCtx(c)
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("id tidak valid")
