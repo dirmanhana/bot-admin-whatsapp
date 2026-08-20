@@ -300,7 +300,7 @@ func (s *Store) CreateOrder(ctx context.Context, customerID int64, address, deli
 
 func (s *Store) ListOrders(ctx context.Context, status string, limit int) ([]Order, error) {
 	q := `
-		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.note, o.created_at, o.updated_at,
+		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.shipping_courier, o.shipping_resi, o.note, o.created_at, o.updated_at,
 		       c.phone, c.name, c.status AS customer_status
 		FROM orders o JOIN customers c ON c.id = o.customer_id`
 	args := []any{s.tid(ctx), s.tid(ctx)}
@@ -324,7 +324,7 @@ func (s *Store) ListOrders(ctx context.Context, status string, limit int) ([]Ord
 		var o Order
 		var c Customer
 		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address,
-			&o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status); err != nil {
+			&o.DeliveryType, &o.DeliveryFee, &o.ShippingCourier, &o.ShippingResi, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status); err != nil {
 			return nil, err
 		}
 		o.Customer = &c
@@ -347,11 +347,11 @@ func (s *Store) GetOrder(ctx context.Context, id int64) (*Order, error) {
 	var o Order
 	var c Customer
 	err := s.db.QueryRowContext(ctx, s.q(`
-		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.note, o.created_at, o.updated_at,
+		SELECT o.id, o.order_number, o.customer_id, o.status, o.total, o.address, o.delivery_type, o.delivery_fee, o.shipping_courier, o.shipping_resi, o.note, o.created_at, o.updated_at,
 		       c.phone, c.name, c.status
 		FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1 AND o.tenant_id = $2 AND c.tenant_id = $3`), id, s.tid(ctx), s.tid(ctx)).
 		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Total, &o.Address,
-			&o.DeliveryType, &o.DeliveryFee, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status)
+			&o.DeliveryType, &o.DeliveryFee, &o.ShippingCourier, &o.ShippingResi, &o.Note, &o.CreatedAt, &o.UpdatedAt, &c.Phone, &c.Name, &c.Status)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -388,6 +388,43 @@ func (s *Store) getOrderItems(ctx context.Context, orderID int64) ([]OrderItem, 
 func (s *Store) UpdateOrderStatus(ctx context.Context, id int64, status string) error {
 	_, err := s.db.ExecContext(ctx, s.q(`UPDATE orders SET status = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4`), status, time.Now(), id, s.tid(ctx))
 	return err
+}
+
+// SetOrderShipping menyimpan ekspedisi & nomor resi (opsional; kosong untuk
+// barang digital).
+func (s *Store) SetOrderShipping(ctx context.Context, id int64, courier, resi string) error {
+	_, err := s.db.ExecContext(ctx, s.q(`
+		UPDATE orders SET shipping_courier = $1, shipping_resi = $2, updated_at = $3
+		WHERE id = $4 AND tenant_id = $5`),
+		strings.TrimSpace(courier), strings.TrimSpace(resi), time.Now(), id, s.tid(ctx))
+	return err
+}
+
+// ListOrdersByCustomer mengembalikan pesanan milik satu pelanggan (ter-scope
+// tenant) — dipakai untuk menjawab pertanyaan "pesanan saya status apa?".
+func (s *Store) ListOrdersByCustomer(ctx context.Context, customerID int64, limit int) ([]Order, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx, s.q(`
+		SELECT id, order_number, status, total, address, delivery_type, delivery_fee, shipping_courier, shipping_resi, created_at, updated_at
+		FROM orders
+		WHERE tenant_id = $1 AND customer_id = $2
+		ORDER BY created_at DESC LIMIT $3`), s.tid(ctx), customerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Order
+	for rows.Next() {
+		var o Order
+		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.Status, &o.Total, &o.Address, &o.DeliveryType, &o.DeliveryFee,
+			&o.ShippingCourier, &o.ShippingResi, &o.CreatedAt, &o.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) DashboardStats(ctx context.Context) (*DashboardStats, error) {

@@ -312,3 +312,35 @@ func TestCreateOrderDecrementsStock(t *testing.T) {
 		t.Fatalf("jumlah order harus tetap 1, dapat %d", len(orders))
 	}
 }
+
+func TestSetOrderShippingAndListByCustomer(t *testing.T) {
+	_, st := openTestDB(t)
+	ctx := WithTenant(context.Background(), 1)
+	c, _ := st.GetOrCreateCustomer(ctx, "62811", "62811@s.whatsapp.net", "A")
+	p, _ := st.CreateProduct(ctx, &Product{Name: "a", Price: 1, Stock: 10, IsActive: true})
+
+	o, err := st.CreateOrder(ctx, c.ID, "addr", "kirim", 0, []OrderItem{{ProductID: p, ProductName: "a", Price: 1, Qty: 2}})
+	if err != nil {
+		t.Fatalf("order: %v", err)
+	}
+	// Simpan ekspedisi & resi, lalu status dikirim.
+	if err := st.SetOrderShipping(ctx, o.ID, "JNE", "RESI-12345"); err != nil {
+		t.Fatalf("set shipping: %v", err)
+	}
+	if err := st.UpdateOrderStatus(ctx, o.ID, "dikirim"); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	got, err := st.ListOrdersByCustomer(ctx, c.ID, 5)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("list by customer: %v (%v)", got, err)
+	}
+	if got[0].ShippingCourier != "JNE" || got[0].ShippingResi != "RESI-12345" || got[0].Status != "dikirim" {
+		t.Fatalf("order = %+v", got[0])
+	}
+	// Pelanggan lain tidak melihat order ini.
+	c2, _ := st.GetOrCreateCustomer(ctx, "62822", "62822@s.whatsapp.net", "B")
+	if o2, _ := st.ListOrdersByCustomer(ctx, c2.ID, 5); len(o2) != 0 {
+		t.Fatalf("customer lain melihat order: %+v", o2)
+	}
+}

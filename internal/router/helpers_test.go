@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dirman/bot-admin-whatsapp/internal/store"
@@ -120,5 +121,18 @@ func TestContainsOrderIntent(t *testing.T) {
 		if got := containsOrderIntent(in); got != want {
 			t.Errorf("containsOrderIntent(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+func TestOrderStatusText(t *testing.T) {
+	for s, want := range map[string]string{
+		"baru": "🕐", "diproses": "👨‍🍳", "dikirim": "🚚", "selesai": "✅", "batal": "❌",
+	} {
+		if got := orderStatusText(s); !strings.HasPrefix(got, want) {
+			t.Errorf("orderStatusText(%q) = %q, ingin diawali %q", s, got, want)
+		}
+	}
+	if orderStatusText("unknown") != "" {
+		t.Error("status tak dikenal harus kosong")
 	}
 }

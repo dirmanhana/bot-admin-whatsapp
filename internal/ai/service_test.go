@@ -9,9 +9,9 @@ import (
 
 func TestFormatPrice(t *testing.T) {
 	cases := map[int64]string{
-		0:      "Rp0",
-		500:    "Rp500",
-		25000:  "Rp25.000",
+		0:       "Rp0",
+		500:     "Rp500",
+		25000:   "Rp25.000",
 		1234567: "Rp1.234.567",
 	}
 	for in, want := range cases {

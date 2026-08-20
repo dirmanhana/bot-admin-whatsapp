@@ -49,19 +49,21 @@ type OrderItem struct {
 }
 
 type Order struct {
-	ID           int64       `json:"id"`
-	OrderNumber  string      `json:"order_number"`
-	CustomerID   int64       `json:"customer_id"`
-	Status       string      `json:"status"`
-	Total        int64       `json:"total"`
-	Address      string      `json:"address"`
-	DeliveryType string      `json:"delivery_type"`
-	DeliveryFee  int64       `json:"delivery_fee"`
-	Note         string      `json:"note"`
-	CreatedAt    time.Time   `json:"created_at"`
-	UpdatedAt    time.Time   `json:"updated_at"`
-	Customer     *Customer   `json:"customer,omitempty"`
-	Items        []OrderItem `json:"items,omitempty"`
+	ID              int64       `json:"id"`
+	OrderNumber     string      `json:"order_number"`
+	CustomerID      int64       `json:"customer_id"`
+	Status          string      `json:"status"`
+	Total           int64       `json:"total"`
+	Address         string      `json:"address"`
+	DeliveryType    string      `json:"delivery_type"`
+	DeliveryFee     int64       `json:"delivery_fee"`
+	ShippingCourier string      `json:"shipping_courier"` // ekspedisi, opsional (kosong utk barang digital)
+	ShippingResi    string      `json:"shipping_resi"`    // nomor resi, opsional
+	Note            string      `json:"note"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	Customer        *Customer   `json:"customer,omitempty"`
+	Items           []OrderItem `json:"items,omitempty"`
 }
 
 type ChatMessage struct {

@@ -176,6 +176,16 @@ func (r *Router) handleCustomerMessage(ctx context.Context, c *store.Customer, b
 		return
 	}
 
+	// Pertanyaan status pesanan yang sudah ada ("pesanan saya mana?").
+	if r.tryOrderStatusQuery(ctx, c, body) {
+		return
+	}
+
+	// Konfirmasi pembayaran ("sudah transfer") untuk pesanan yang menunggu.
+	if r.handlePaymentConfirmation(ctx, c, body) {
+		return
+	}
+
 	// Niat memesan dalam kalimat bebas ("saya mau pesan bakso kering 10 pcs")
 	// ditangani sebagai alur order, BUKAN diteruskan ke AI.
 	if r.tryOrderIntent(ctx, c, body) {
@@ -265,6 +275,151 @@ func (r *Router) tryOrderIntent(ctx context.Context, c *store.Customer, body str
 	})
 	r.reply(ctx, c, fmt.Sprintf("Anda memilih *%s* — %s.\n\nBerapa jumlah yang ingin dipesan? (mis. *2*)",
 		selected.Name, FormatPrice(selected.Price)))
+	return true
+}
+
+// tryOrderStatusQuery menjawab pertanyaan pelanggan tentang pesanannya yang
+// sudah ada ("pesanan saya mana?", "sudah dikirim?") dengan status terbaru.
+// Mengembalikan true bila pesan ditangani di sini.
+func (r *Router) tryOrderStatusQuery(ctx context.Context, c *store.Customer, body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	keywords := []string{
+		"status pesanan", "status order", "pesanan saya", "order saya",
+		"cek pesanan", "cek order", "dimana pesanan", "mana pesanan",
+		"sudah dikirim", "sudah sampai", "sampai mana", "tracking",
+		"resinya", "dimana resi", "pesanan aku", "order aku",
+	}
+	hit := false
+	for _, k := range keywords {
+		if strings.Contains(lower, k) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false
+	}
+
+	orders, err := r.store.ListOrdersByCustomer(ctx, c.ID, 5)
+	if err != nil {
+		return false
+	}
+	if len(orders) == 0 {
+		r.reply(ctx, c, "Kamu belum punya pesanan di toko kami. Ketik *menu* untuk mulai berbelanja 😊")
+		return true
+	}
+
+	var b strings.Builder
+	b.WriteString("📦 *Pesanan Kamu*\n━━━━━━━━━━━━━━\n")
+	for i, o := range orders {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "%s\n%s\n", o.OrderNumber, orderStatusText(o.Status))
+		if o.ShippingResi != "" {
+			if o.ShippingCourier != "" {
+				fmt.Fprintf(&b, "🚚 %s — No. Resi: %s\n", o.ShippingCourier, o.ShippingResi)
+			} else {
+				fmt.Fprintf(&b, "📦 No. Resi: %s\n", o.ShippingResi)
+			}
+		}
+		if o.DeliveryType == "ambil" {
+			b.WriteString("🏬 Pengambilan: di toko\n")
+		}
+	}
+	b.WriteString("━━━━━━━━━━━━━━\nKetik *menu* untuk melihat katalog.")
+	r.reply(ctx, c, b.String())
+	return true
+}
+
+// orderStatusText menerjemahkan status pesanan ke kalimat ramah pelanggan.
+func orderStatusText(s string) string {
+	return map[string]string{
+		"baru":     "🕐 *Baru* — pesananmu sudah kami terima. Silakan selesaikan pembayaran ya 😊",
+		"diproses": "👨‍🍳 *Sedang diproses* — kami siapkan pesananmu.",
+		"dikirim":  "🚚 *Sedang dikirim* — paketnya dalam perjalanan!",
+		"selesai":  "✅ *Selesai* — terima kasih sudah belanja! 💖",
+		"batal":    "❌ *Dibatalkan* — hubungi admin bila ada kendala.",
+	}[s]
+}
+
+// paymentInfo menyusun instruksi pembayaran toko (rekening & QRIS) untuk
+// ditampilkan di alur pesanan. Kosong bila tidak diatur.
+func (r *Router) paymentInfo(ctx context.Context) string {
+	st, err := r.settings.Get(ctx)
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	if st.PaymentAccount != "" {
+		parts = append(parts, "💳 Transfer: "+st.PaymentAccount)
+	}
+	if st.PaymentQRIS != "" {
+		parts = append(parts, "📲 QRIS: "+st.PaymentQRIS)
+	}
+	if len(parts) == 0 && st.PaymentMethods != "" {
+		parts = append(parts, "💳 Pembayaran: "+st.PaymentMethods)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// handlePaymentConfirmation menangani pesan pelanggan yang mengonfirmasi
+// pembayaran ("sudah transfer", "sudah bayar") untuk pesanan yang masih
+// menunggu; admin diberi tahu lewat WhatsApp. Mengembalikan true bila
+// ditangani (AI tidak ikut menjawab).
+func (r *Router) handlePaymentConfirmation(ctx context.Context, c *store.Customer, body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	keywords := []string{"sudah transfer", "udah transfer", "sudah bayar", "udah bayar",
+		"sudah dibayar", "sudah membayar", "lunas", "transfer sudah"}
+	hit := false
+	for _, k := range keywords {
+		if strings.Contains(lower, k) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false
+	}
+
+	orders, err := r.store.ListOrdersByCustomer(ctx, c.ID, 3)
+	if err != nil {
+		return false
+	}
+	var pending *store.Order
+	for i := range orders {
+		if orders[i].Status == "baru" || orders[i].Status == "diproses" {
+			pending = &orders[i]
+			break
+		}
+	}
+	if pending == nil {
+		return false // tidak ada pesanan menunggu — biarkan AI/normal menjawab
+	}
+
+	r.reply(ctx, c, fmt.Sprintf(
+		"Terima kasih! 🙏 Pembayaran untuk *%s* sudah kami catat.\n"+
+			"Admin akan segera memproses pesananmu ya. Kalau mau tanya-tanya, ketik *menu*. 💖", pending.OrderNumber))
+
+	// Notifikasi admin.
+	adminPhone := r.storeSettings(ctx).AdminPhone
+	if adminPhone != "" {
+		adminCust, err := r.store.GetCustomerByPhone(ctx, adminPhone)
+		if err != nil || adminCust == nil {
+			adminCust, _ = r.store.GetOrCreateCustomer(ctx, adminPhone, adminPhone+"@s.whatsapp.net", "Admin")
+		}
+		msg := fmt.Sprintf(`💵 *KONFIRMASI PEMBAYARAN*
+━━━━━━━━━━━━━━
+👤 %s
+📱 %s
+📋 Order: %s
+━━━━━━━━━━━━━━
+Cek & proses pesanannya ya.`,
+			c.Name, c.Phone, pending.OrderNumber)
+		if _, err := r.gowa.SendText(ctx, WATarget(adminCust), msg); err != nil {
+			log.Printf("notif pembayaran ke admin gagal: %v", err)
+		}
+	}
 	return true
 }
 
@@ -454,7 +609,11 @@ func (r *Router) sendOrderSummary(ctx context.Context, c *store.Customer, items 
 	if deliveryType == "ambil" {
 		b.WriteString("🏬 Pengambilan: *di toko*\n")
 	}
-	fmt.Fprintf(&b, "📍 Alamat: %s\n\nKetik *ya* untuk konfirmasi, atau *batal* untuk membatalkan.", address)
+	fmt.Fprintf(&b, "📍 Alamat: %s\n", address)
+	if pi := r.paymentInfo(ctx); pi != "" {
+		fmt.Fprintf(&b, "\n💳 *Pembayaran*\n%s\n", pi)
+	}
+	b.WriteString("\nKetik *ya* untuk konfirmasi, atau *batal* untuk membatalkan.")
 	r.reply(ctx, c, b.String())
 }
 
@@ -509,14 +668,18 @@ Kelola di dashboard atau balas /ringkasan.`,
 	for _, it := range order.Items {
 		fmt.Fprintf(&itemsText, "📦 %s x %d\n", it.ProductName, it.Qty)
 	}
-	r.reply(ctx, c, fmt.Sprintf(`✅ *Pesanan berhasil!*
+	confirmation := fmt.Sprintf(`✅ *Pesanan berhasil!*
 ━━━━━━━━━━━━━━
 📋 No. Order: %s
 %s💰 Total: %s
 📍 Alamat: %s
-━━━━━━━━━━━━━━
-Kami akan segera memproses pesanan Anda. Terima kasih telah berbelanja di *%s*! 💖`,
-		order.OrderNumber, itemsText.String(), FormatPrice(order.Total), session.Address, st.StoreName))
+`, order.OrderNumber, itemsText.String(), FormatPrice(order.Total), session.Address)
+	if pi := r.paymentInfo(ctx); pi != "" {
+		confirmation += "━━━━━━━━━━━━━━\n💳 *Pembayaran*\n" + pi + "\n"
+	}
+	confirmation += fmt.Sprintf("━━━━━━━━━━━━━━\nSetelah pembayaran, balas *sudah transfer* agar admin segera memproses pesananmu.\n"+
+		"Terima kasih telah berbelanja di *%s*! 💖", st.StoreName)
+	r.reply(ctx, c, confirmation)
 }
 
 // SendOrderStatusUpdate informs a customer that their order status changed.
@@ -540,6 +703,14 @@ func (r *Router) SendOrderStatusUpdate(ctx context.Context, order *store.Order, 
 	st := r.storeSettings(ctx)
 	msg := fmt.Sprintf("Halo %s! Pesanan *%s* Anda %s.\n\nTerima kasih telah berbelanja di *%s*! 💖",
 		order.Customer.Name, order.OrderNumber, label, st.StoreName)
+	// Sertakan ekspedisi & nomor resi saat status dikirim (opsional).
+	if status == "dikirim" && order.ShippingResi != "" {
+		courier := order.ShippingCourier
+		if courier != "" {
+			courier += " "
+		}
+		msg += fmt.Sprintf("\n\n🚚 *Pengiriman*\n%sNo. Resi: %s", courier, order.ShippingResi)
+	}
 	_, err := r.gowa.SendText(ctx, WATarget(order.Customer), msg)
 	return err
 }
@@ -548,7 +719,7 @@ func (r *Router) SendOrderStatusUpdate(ctx context.Context, order *store.Order, 
 
 func (r *Router) reply(ctx context.Context, c *store.Customer, text string) {
 	if _, err := r.gowa.SendText(ctx, WATarget(c), text); err != nil {
-		log.Printf("reply ke %s gagal: %v", r.maskPhone(c.Phone), err)
+		log.Printf("reply ke %s gagal: %v (isi: %q)", r.maskPhone(c.Phone), err, r.maskBody(text))
 		return
 	}
 	_ = r.store.SaveChatMessage(ctx, &store.ChatMessage{

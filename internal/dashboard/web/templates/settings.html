@@ -35,6 +35,18 @@
           class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
       </div>
       <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">Rekening Pembayaran</label>
+        <input name="payment_account" value="{{$st.PaymentAccount}}" placeholder="mis. BCA 1234567890 a.n. Toko Saya"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        <span class="text-xs text-muted-foreground">Ditampilkan di alur pesanan agar pelanggan tahu transfer ke mana.</span>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-sm text-muted-foreground">QRIS (opsional)</label>
+        <input name="payment_qris" value="{{$st.PaymentQRIS}}" placeholder="mis. https://qris.id/... atau nama merchant"
+          class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">
+        <span class="text-xs text-muted-foreground">Link/petunjuk QRIS; opsional untuk barang digital.</span>
+      </div>
+      <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-foreground">Ongkir (Rp, 0 = gratis)</label>
         <input name="delivery_fee" value="{{$st.DeliveryFee}}" type="number" min="0" placeholder="mis. 10000"
           class="border-input file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 w-full min-w-0 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:ring-3 md:text-sm">

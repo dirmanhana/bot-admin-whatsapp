@@ -19,6 +19,8 @@ const (
 	KeyAIName           = "ai_name"
 	KeyStoreHours       = "store_hours"
 	KeyPaymentMethods   = "payment_methods"
+	KeyPaymentAccount   = "payment_account"
+	KeyPaymentQRIS      = "payment_qris"
 	KeyDeliveryFee      = "delivery_fee"
 	KeyAIDailyQuota     = "ai_daily_quota"
 	KeyAIMaxTokens      = "ai_max_tokens"
@@ -37,6 +39,8 @@ type Settings struct {
 	AIName         string
 	StoreHours     string
 	PaymentMethods string
+	PaymentAccount string // rekening pembayaran (mis. "BCA 123456 a.n. Toko")
+	PaymentQRIS    string // petunjuk/payload QRIS (opsional)
 	DeliveryFee    int64
 	AIDailyQuota   int // 0 = tanpa batas
 	AIMaxTokens    int
@@ -91,6 +95,8 @@ func (s *Service) Get(ctx context.Context) (*Settings, error) {
 		AIName:         strings.TrimSpace(kv[KeyAIName]),
 		StoreHours:     strings.TrimSpace(kv[KeyStoreHours]),
 		PaymentMethods: strings.TrimSpace(kv[KeyPaymentMethods]),
+		PaymentAccount: strings.TrimSpace(kv[KeyPaymentAccount]),
+		PaymentQRIS:    strings.TrimSpace(kv[KeyPaymentQRIS]),
 		AIDailyQuota:   s.cfg.AIDailyQuota,
 		AIMaxTokens:    s.cfg.AIMaxTokens,
 		AIMaxProducts:  s.cfg.AIMaxProducts,
@@ -138,6 +144,8 @@ func (s *Service) Save(ctx context.Context, st Settings) error {
 		KeyAIName:         strings.TrimSpace(st.AIName),
 		KeyStoreHours:     strings.TrimSpace(st.StoreHours),
 		KeyPaymentMethods: strings.TrimSpace(st.PaymentMethods),
+		KeyPaymentAccount: strings.TrimSpace(st.PaymentAccount),
+		KeyPaymentQRIS:    strings.TrimSpace(st.PaymentQRIS),
 		KeyDeliveryFee:    strconv.FormatInt(st.DeliveryFee, 10),
 		KeyAIDailyQuota:   strconv.Itoa(st.AIDailyQuota),
 		KeyAIMaxTokens:    strconv.Itoa(st.AIMaxTokens),

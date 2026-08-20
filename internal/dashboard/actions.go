@@ -100,6 +100,12 @@ func (s *Server) actionOrderStatus(c *fiber.Ctx) error {
 	if err := s.store.UpdateOrderStatus(ctx, id, status); err != nil {
 		return redirect(c, "/admin/orders", "Gagal memperbarui status: "+err.Error(), true)
 	}
+	// Ekspedisi & nomor resi (opsional — biarkan kosong untuk barang digital).
+	courier := strings.TrimSpace(c.FormValue("shipping_courier"))
+	resi := strings.TrimSpace(c.FormValue("shipping_resi"))
+	if err := s.store.SetOrderShipping(ctx, id, courier, resi); err != nil {
+		return redirect(c, "/admin/orders", "Gagal menyimpan ekspedisi/resi: "+err.Error(), true)
+	}
 	order, err := s.store.GetOrder(ctx, id)
 	if err == nil && order != nil {
 		go func() { _ = s.rtr.SendOrderStatusUpdate(ctx, order, status) }()

@@ -52,6 +52,8 @@ func (s *Server) actionSettingsSave(c *fiber.Ctx) error {
 		AIName:         strings.TrimSpace(c.FormValue("ai_name")),
 		StoreHours:     strings.TrimSpace(c.FormValue("store_hours")),
 		PaymentMethods: strings.TrimSpace(c.FormValue("payment_methods")),
+		PaymentAccount: strings.TrimSpace(c.FormValue("payment_account")),
+		PaymentQRIS:    strings.TrimSpace(c.FormValue("payment_qris")),
 		DeliveryFee:    fee,
 		AIDailyQuota:   quota,
 		AIMaxTokens:    maxTokens,
